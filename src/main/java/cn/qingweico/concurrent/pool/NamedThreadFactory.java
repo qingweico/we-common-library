@@ -21,7 +21,7 @@ public class NamedThreadFactory implements ThreadFactory {
     @Override
     public Thread newThread(@NotNull Runnable r) {
         Thread t = new Thread(r,
-                namePrefix + Symbol.WHIFFLETREE + threadNumber.getAndIncrement());
+                namePrefix + Symbol.DASHED + threadNumber.getAndIncrement());
         if (t.isDaemon()) {
             t.setDaemon(false);
         }

@@ -2,7 +2,9 @@ package cn.qingweico.datetime;
 
 import org.apache.commons.lang3.time.FastDateFormat;
 
+import java.time.Instant;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.Date;
 
@@ -25,7 +27,7 @@ public class DateUtil {
      * @see #DEFAULT_DATE_TIME_FORMATTER
      */
     public static LocalDateTime parse(String dateStr) {
-        return LocalDateTime.parse(dateStr, DEFAULT_DATE_TIME_FORMATTER);
+        return java.time.LocalDateTime.parse(dateStr, DEFAULT_DATE_TIME_FORMATTER);
     }
 
     /**
@@ -43,7 +45,7 @@ public class DateUtil {
      * 使用默认格式格式化日期对象
      *
      * @param date 要格式化的日期对象
-     * @return 格式化后的日期字符串(yyyy-MM-dd HH:mm:ss)
+     * @return 格式化后的日期字符串 {@link #DATE_TIME_FORMATTER}
      * @see #DATE_TIME_FORMATTER
      */
     public static String format(Date date) {
@@ -53,7 +55,7 @@ public class DateUtil {
     /**
      * 使用指定pattern格式化日期对象
      *
-     * @param date 要格式化的日期对象
+     * @param date    要格式化的日期对象
      * @param pattern 日期格式模式
      * @return 格式化后的日期字符串
      */
@@ -64,12 +66,31 @@ public class DateUtil {
     /**
      * 获取当前时间的默认格式字符串
      *
-     * @return 当前时间的格式化字符串(yyyy-MM-dd HH:mm:ss)
+     * @return 当前时间的格式化字符串 {@link #DATE_TIME_FORMATTER}
      * @see #format(Date)
      */
     public static String now() {
         return format(new Date());
     }
 
-
+    /**
+     * 将毫秒数转换为格式化的日期时间字符串
+     * 2025-08-09T08:30:11.511 这种时间格式的被称为 ISO-8601
+     * 特点:
+     * ---- ISO-8601 是国际标准化组织(ISO)制定的日期和时间表示法的国际标准
+     * ---- 按从大到小的顺序排列
+     * ---- 使用数字表示, 避免语言差异
+     * ---- 支持时区信息
+     * ---- 使用 T 分隔日期和时间
+     * ---- 可扩展(可包含毫秒、微秒等)
+     *
+     * @param time 毫秒数
+     * @return {@link #DATE_TIME_FORMATTER 格式的字符串日期}
+     * @see DateTimeFormatter#ISO_LOCAL_DATE_TIME
+     */
+    public static String epochMillisToLocalDateTime(long time) {
+        Instant instant = Instant.ofEpochMilli(time);
+        LocalDateTime ld = LocalDateTime.ofInstant(instant, ZoneId.systemDefault());
+        return ld.format(DEFAULT_DATE_TIME_FORMATTER);
+    }
 }

@@ -1,5 +1,6 @@
 package cn.qingweico.convert;
 
+import cn.qingweico.constants.Symbol;
 import org.apache.commons.lang3.StringUtils;
 
 import java.math.BigDecimal;
@@ -54,7 +55,7 @@ public class Convert {
     }
 
     public static String toString(Object obj) {
-        return toString(obj, null);
+        return toString(obj, Symbol.EMPTY);
     }
 
     public static String toString(Object obj, String nvl) {

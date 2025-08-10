@@ -758,4 +758,110 @@ public final class FileUtils {
         }
     }
 
+    /**
+     * 合并文件夹下所有的文件内容到指定的文件
+     * @param in 文件夹路径
+     * @param out 合并到指定的文件
+     */
+    public static void mergeFile(String in, String out) {
+        mergeFile(in, out, null, null);
+    }
+
+    /**
+     *合并文件夹下所有的文件内容到指定的文件
+     * @param in 文件夹路径
+     * @param out 合并到指定的文件
+     * @param fileSuffix 合并时需要排除文件的后缀名称 [".txt", ".sql"]
+     * @param excludeDirs 合并时需要排除的目录 [".git", "node_modules"]
+     */
+    public static void mergeFile(String in, String out, List<String> fileSuffix, List<String> excludeDirs) {
+        if (StringUtils.isEmpty(in)) {
+            log.error("in 不能为空");
+            return;
+        }
+        if (StringUtils.isEmpty(out)) {
+            log.error("out 不能为空");
+            return;
+        }
+        Path sourceDir = Paths.get(in);
+        Path targetFile = Paths.get(out);
+        try {
+            try (Stream<Path> walk = Files.walk(sourceDir)) {
+                TreeMap<Path, List<Path>> tree = walk
+                        // 排除根目录
+                        .filter(path -> !path.toFile().getAbsolutePath().equals(in))
+                        // 排除不需要合并读取的文件夹
+                        .filter(path -> !isExcludedDir(path, excludeDirs))
+                        // 排除不需要合并读取的后缀文件
+                        .filter(path -> !isExcludedFileSuffix(path, fileSuffix))
+                        .collect(Collectors.groupingBy(Path::getParent,
+                                TreeMap::new, Collectors.toList()));
+                try (BufferedWriter writer = Files.newBufferedWriter(targetFile, StandardCharsets.UTF_8)) {
+                    int merged = 0;
+                    log.info("文件写入合并开始");
+                    for (Path path : tree.keySet()) {
+                        log.info("{}", path.toFile().getAbsolutePath());
+                        for (Path file : tree.get(path)) {
+                            try {
+                                if (Files.isRegularFile(file)) {
+                                    // 写入文件名
+                                    writer.write("----------" + file.getFileName().toString() + "----------");
+                                    writer.newLine();
+
+                                    // 写入文件内容
+                                    // BufferedReader reader = Files.newBufferedReader(file)
+                                    // BufferedReader 专门用于读取文本文件, 会尝试将文件内容按字符编码解析为字符串
+                                    // 如果文件内容是二进制数据(如图片、音频、视频等), 使用 BufferedReader 读取时会抛出
+                                    // MalformedInputException 或其他 IOException
+                                    // 如果需要读取二进制文件,使用 FileInputStream 手动构造 BufferedReader
+                                    try (BufferedReader reader = Files.newBufferedReader(file)) {
+                                        String line;
+                                        while ((line = reader.readLine()) != null) {
+                                            writer.write(line);
+                                            writer.newLine();
+                                        }
+                                    }
+                                    writer.newLine();
+                                    merged++;
+                                    log.info("\t\t {}", file.getFileName());
+                                }
+                            } catch (IOException e) {
+                                log.error("文件 {} 写入合并异常, {}", file.getFileName(), e.getMessage());
+                            }
+                        }
+                    }
+                    log.info("文件写入合并结束, 一共 {} 个文件", merged);
+                } catch (IOException e) {
+                    log.error(e.getMessage(), e);
+                    throw new RuntimeException(e);
+                }
+            }
+        } catch (IOException e) {
+            log.error(e.getMessage(), e);
+        }
+    }
+
+    private static boolean isExcludedDir(Path path, List<String> excludeDirs) {
+        if (excludeDirs == null) {
+            return false;
+        }
+        for (String excludeDir : excludeDirs) {
+            if (path.toString().contains(excludeDir)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isExcludedFileSuffix(Path path, List<String> fileSuffixList) {
+        if (fileSuffixList == null) {
+            return false;
+        }
+        for (String fileSuffix : fileSuffixList) {
+            if (path.toString().toLowerCase().endsWith(fileSuffix)) {
+                return true;
+            }
+        }
+        return false;
+    }
 }

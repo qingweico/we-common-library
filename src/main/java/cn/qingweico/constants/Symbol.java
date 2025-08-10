@@ -1,17 +1,15 @@
 package cn.qingweico.constants;
 
+import cn.hutool.core.text.StrPool;
+import org.apache.commons.lang3.StringUtils;
+
 /**
  * 全局符号
  *
  * @author zqw
  */
-public interface Symbol {
+public interface Symbol extends StrPool {
     // 符号
-
-    /**
-     * Dot : "."
-     */
-    String DOT = ".";
 
     /**
      * Class: "class"
@@ -29,11 +27,6 @@ public interface Symbol {
     String EQUAL = "=";
 
     /**
-     * BACKSLASH: "\"
-     */
-    String BACKSLASH = "\\";
-
-    /**
      * FULL_STOP: "。"
      */
     String FULL_STOP = "。";
@@ -46,34 +39,13 @@ public interface Symbol {
      * POUND_SIGN: "#"; `#`有很多种读法
      */
     String POUND_SIGN = "#";
-    /**
-     * COLON: ":"
-     */
-    String COLON = ":";
 
     /**
-     * WHITE_SPACE: " "
+     * @see StringUtils#SPACE
      */
-    String WHITE_SPACE = " ";
+    String WHITE_SPACE = StringUtils.SPACE;
     /**
-     * COMMA: ","
+     * @see StringUtils#EMPTY
      */
-    String COMMA = ",";
-    /**
-     * SLASH: "/"
-     */
-    String SLASH = "/";
-    /**
-     * EMPTY: ""
-     */
-    String EMPTY = "";
-
-    /**
-     * WHIFFLETREE: "-"
-     */
-    String WHIFFLETREE = "-";
-    /**
-     * LINE_BREAK: "\n"
-     */
-    String LINE_BREAK = "\n";
+    String EMPTY = StringUtils.EMPTY;
 }

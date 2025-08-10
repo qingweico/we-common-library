@@ -21,6 +21,10 @@ public class ThreadPoolBuilder {
         return new Builder(blockQueueSize);
     }
 
+    public static ExecutorService create() {
+        return builder().build();
+    }
+
     /*single*/
 
     public static ExecutorService single() {
