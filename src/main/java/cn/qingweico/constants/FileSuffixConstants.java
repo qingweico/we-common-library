@@ -26,6 +26,18 @@ public interface FileSuffixConstants {
      * Class File suffix: ".class"
      */
     String CLASS = Symbol.DOT + Symbol.CLASS;
-
+    /**
+     * Text File suffix: ".txt"
+     */
     String TXT = Symbol.DOT + "txt";
+
+    /**
+     * Pdf File suffix: ".pdf"
+     */
+    String PDF = Symbol.DOT + "pdf";
+    /**
+     * Word File suffix: ".docx"
+     */
+    String WORD = Symbol.DOT + "docx";
+
 }

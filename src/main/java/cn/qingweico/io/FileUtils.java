@@ -1,6 +1,7 @@
 package cn.qingweico.io;
 
 
+import cn.hutool.core.io.FileUtil;
 import cn.qingweico.concurrent.pool.ThreadPoolBuilder;
 import cn.qingweico.constants.Constants;
 import cn.qingweico.constants.FileSuffixConstants;
@@ -626,22 +627,24 @@ public final class FileUtils {
     }
 
     /**
-     * 创建目录
+     * 创建目录(如果目录包含多个父层级则递归创建)
      *
      * @param path 要创建的目录路径
      * @throws RuntimeException 如果目录创建失败
+     * @see org.apache.commons.io.FileUtils#forceMkdir
+     * @see FileUtil#mkdir(String)
      */
     public static void createDir(String path) {
-        File file = new File(path);
-        if (file.exists()) {
+        var p = Paths.get(path);
+        if (Files.exists(p)) {
             return;
         }
-        boolean mkdir = file.mkdir();
-        if (mkdir) {
-            log.info("Create dir [{}] success", file.getAbsolutePath());
-        } else {
-            String msg = String.format("Create dir [{%s}] failed", file.getAbsolutePath());
-            throw new RuntimeException(msg);
+        Path dir;
+        try {
+            dir = Files.createDirectories(p);
+            log.info("Create dir [{}] success", dir.toFile().getAbsolutePath());
+        } catch (IOException e) {
+            log.error("Create dir failed, {}", e.getMessage(), e);
         }
     }
 
@@ -663,12 +666,11 @@ public final class FileUtils {
             if (file.exists()) {
                 continue;
             }
-            boolean newFile;
+            boolean newFile = false;
             try {
                 newFile = file.createNewFile();
             } catch (IOException e) {
-                String msg = String.format("Create file [{%s}] failed", file.getAbsolutePath());
-                throw new RuntimeException(msg);
+                log.info("Create file failed, {}", e.getMessage(), e);
             }
             if (newFile) {
                 log.info("Create file [{}] success", file.getAbsolutePath());
@@ -760,7 +762,8 @@ public final class FileUtils {
 
     /**
      * 合并文件夹下所有的文件内容到指定的文件
-     * @param in 文件夹路径
+     *
+     * @param in  文件夹路径
      * @param out 合并到指定的文件
      */
     public static void mergeFile(String in, String out) {
@@ -768,10 +771,11 @@ public final class FileUtils {
     }
 
     /**
-     *合并文件夹下所有的文件内容到指定的文件
-     * @param in 文件夹路径
-     * @param out 合并到指定的文件
-     * @param fileSuffix 合并时需要排除文件的后缀名称 [".txt", ".sql"]
+     * 合并文件夹下所有的文件内容到指定的文件
+     *
+     * @param in          文件夹路径
+     * @param out         合并到指定的文件
+     * @param fileSuffix  合并时需要排除文件的后缀名称 [".txt", ".sql"]
      * @param excludeDirs 合并时需要排除的目录 [".git", "node_modules"]
      */
     public static void mergeFile(String in, String out, List<String> fileSuffix, List<String> excludeDirs) {

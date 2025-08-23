@@ -13,7 +13,7 @@ import java.net.Proxy;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Mime 常量 {@link ContentType} {@link MimeTypeUtils}
+ * Mime 常量 {@link ContentType} {@link MimeTypeUtils} {@link org.springframework.util.MimeType}
  *
  * @author zqw
  * @date 2025/7/23

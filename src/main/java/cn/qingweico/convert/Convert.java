@@ -9,8 +9,10 @@ import java.math.RoundingMode;
 import java.text.DecimalFormat;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Date;
 import java.util.Locale;
+import java.util.stream.Collectors;
 
 /**
  * @author zqw
@@ -162,6 +164,11 @@ public class Convert {
         return result;
     }
 
+    /**
+     * 将各种类型的数值对象安全地转换为 {@link BigDecimal} 类型
+     * @param obj The object to be converted
+     * @return BigDecimal obj
+     */
     public static BigDecimal toBigDecimal(Object obj) {
         if (obj == null) {
             return BigDecimal.ZERO;
@@ -192,4 +199,62 @@ public class Convert {
             throw new ClassCastException("Can Not make [" + obj + "] into a BigDecimal.");
         }
     }
+
+    /**
+     * 将输入字符串中的字母转换为小写, 并升序排列
+     * @param s 待处理的字符串
+     * @return 仅含小写字母, 按升序排列
+     */
+    public static String toLower(String s) {
+        return toLower(s, false);
+    }
+
+    /**
+     * 将输入字符串中的字母转换为小写, 并排序
+     * @param s 待处理的字符串
+     * @param des 是否倒序
+     * @return 仅含小写字母, 并排序
+     */
+    public static String toLower(String s, boolean des) {
+        if (s == null || s.isEmpty()) {
+            return s;
+        }
+        int n = s.length();
+        ArrayList<Character> list = new ArrayList<>(n);
+        boolean allLower = true;
+        for (int i = 0; i < n; i++) {
+            int c = s.charAt(i);
+            if (((c - 'A') | ('Z' - c)) >= 0) {
+                allLower = false;
+                break;
+            }
+        }
+        if (allLower) {
+            char[] chars = s.toCharArray();
+            for (var c : chars) {
+                list.add(c);
+            }
+        } else {
+            for (int i = 0; i < n; i++) {
+                int c = s.charAt(i);
+                if (Character.isLetter(c)) {
+                    if (((c - 'A') | ('Z' - c)) >= 0) {
+                        list.add((char) (c + 0x20));
+                    } else {
+                        list.add((char) c);
+                    }
+                }
+            }
+        }
+
+        list.sort((a, b) -> des ? b - a : a - b);
+        return list.stream().map(String::valueOf).collect(Collectors.joining());
+    }
+
+    public static void main(String[] args) {
+        System.out.println(toLower("ABCD&&*^&^EFG"));
+        System.out.println(toLower("Zda@%^!@#$%^&*()*^$$#$EaqpoiRdq"));
+        System.out.println(toLower("abcdefg", true));
+    }
+
 }
