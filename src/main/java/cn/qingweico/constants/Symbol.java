@@ -5,7 +5,7 @@ import org.apache.commons.lang3.StringUtils;
 
 /**
  * 全局符号
- *
+ * @see jodd.util.StringPool
  * @author zqw
  */
 public interface Symbol extends StrPool {

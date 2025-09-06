@@ -4,6 +4,7 @@ import cn.qingweico.runtime.ProcessExecutor;
 import sun.misc.Unsafe;
 
 import java.lang.reflect.Field;
+import java.time.Duration;
 
 /**
  * cmpxchg implement cas see {@code openjdk}
@@ -35,6 +36,8 @@ public class UnsafeSupport {
      *
      * @param interval the waiting interval; unit: ms
      * {@link ProcessExecutor#waitFor(long)}
+     * {@link org.apache.commons.lang3.ThreadUtils#sleep(Duration)}}
+     * {@link org.apache.commons.io.ThreadUtils#sleep(Duration)}}
      */
     public static void shortWait(long interval) {
         long start = System.currentTimeMillis();

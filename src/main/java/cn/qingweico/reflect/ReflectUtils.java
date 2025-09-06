@@ -10,6 +10,7 @@ import org.apache.commons.lang3.reflect.FieldUtils;
 import org.apache.commons.lang3.reflect.MethodUtils;
 
 import javax.annotation.Nonnull;
+import java.lang.invoke.MethodHandles;
 import java.lang.reflect.*;
 import java.util.List;
 import java.util.Map;
@@ -123,5 +124,12 @@ public class ReflectUtils {
             }
         }
         return fieldsAsMap;
+    }
+
+    /**
+     * {@code jdk.internal.reflect.Reflection#getCallerClass()}
+     */
+    public static Class<?> getCallerClass() {
+        return MethodHandles.lookup().lookupClass();
     }
 }

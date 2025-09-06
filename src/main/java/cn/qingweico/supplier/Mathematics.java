@@ -20,6 +20,7 @@ public final class Mathematics {
 
     /**
      * 快速幂
+     *
      * @param a 底数
      * @param b 指数
      * @return 幂
@@ -40,6 +41,7 @@ public final class Mathematics {
     /**
      * 计算数字{@code i}二进制中1的个数
      * variable-precision SWAR, Redis中 BITCOUNT 命令实现
+     *
      * @param i the input number(decimal)
      * @return the number of ones in binary
      * @see Integer#bitCount, 另一种牛逼实现
@@ -56,6 +58,6 @@ public final class Mathematics {
         System.out.println(calcPi());
         System.out.println(fastPower(2, 10));
         System.out.println(swar(15));
-        System.out.println( Integer.bitCount(15));
+        System.out.println(Integer.bitCount(15));
     }
 }

@@ -82,6 +82,17 @@ public class BusinessException extends RuntimeException {
         this.msg = msg;
     }
 
+    /**
+     * 包含自定义消息和原始异常
+     *
+     * @param msg   自定义异常信息
+     * @param cause 原始异常
+     */
+    public BusinessException(String msg, Throwable cause) {
+        super(msg, cause);
+        this.msg = msg;
+    }
+
     @Override
     public String getMessage() {
         return this.msg;

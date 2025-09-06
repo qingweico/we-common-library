@@ -67,6 +67,14 @@ public class Tools {
         return array;
     }
 
+    public static double[] genDoubleArray(int n, int bound) {
+        double[] array = new double[n];
+        for (int i = 0; i < n; i++) {
+            array[i] = RandomDataGenerator.rndDouble(bound);
+        }
+        return array;
+    }
+
     public static int[] genIntArray(int n) {
         return genIntArray(n, 100);
     }

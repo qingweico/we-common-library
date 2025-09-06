@@ -5,23 +5,21 @@ import cn.qingweico.constants.Symbol;
 
 import javax.annotation.Nonnull;
 import java.io.PrintStream;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.Map;
-import java.util.Set;
+import java.lang.reflect.Array;
+import java.util.*;
 
 /**
  * @author zqw
  * @date 2021/1/17
  */
-public class Print {
+public final class Print {
     /**
      * Print with a newline
      *
      * @param obj The {@code Object} to be printed
      */
     public static void println(Object obj) {
-        System.out.println(obj);
+        print(obj, true);
     }
 
     /**
@@ -37,7 +35,7 @@ public class Print {
      * @param obj The {@code Object} to be printed
      */
     public static void print(Object obj) {
-        System.out.print(obj);
+        print(obj, false);
     }
 
     /**
@@ -189,4 +187,37 @@ public class Print {
     public static void log(@Nonnull String name, System.Logger.Level logLevel, String message) {
         System.getLogger(name).log(logLevel, message);
     }
+
+    private static void print(Object obj, boolean isNewLine) {
+        if (obj == null) {
+            return;
+        }
+
+        if (obj.getClass().isAssignableFrom(Map.class)) {
+            printMap((Map<?, ?>) obj);
+            return;
+        }
+
+        if (obj.getClass().isAssignableFrom(Collection.class)) {
+            printColl((Collection<?>) obj);
+            return;
+        }
+        if (obj.getClass().isArray()) {
+            int length = Array.getLength(obj);
+            StringJoiner joiner = new StringJoiner(Symbol.COMMA + Symbol.WHITE_SPACE, Symbol.BRACKET_START, Symbol.BRACKET_END);
+            for (int i = 0; i < length; i++) {
+                Object element = Array.get(obj, i);
+                joiner.add(String.valueOf(element));
+            }
+            println(joiner.toString());
+            return;
+        }
+        if (isNewLine) {
+            System.out.println(obj);
+        } else {
+            System.out.print(obj);
+        }
+    }
+
+    private Print() {}
 }

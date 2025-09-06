@@ -642,9 +642,9 @@ public final class FileUtils {
         Path dir;
         try {
             dir = Files.createDirectories(p);
-            log.info("Create dir [{}] success", dir.toFile().getAbsolutePath());
+            log.info("创建目录[{}]成功", dir.toFile().getAbsolutePath());
         } catch (IOException e) {
-            log.error("Create dir failed, {}", e.getMessage(), e);
+            log.error("创建目录失败, {}", e.getMessage(), e);
         }
     }
 
@@ -670,10 +670,10 @@ public final class FileUtils {
             try {
                 newFile = file.createNewFile();
             } catch (IOException e) {
-                log.info("Create file failed, {}", e.getMessage(), e);
+                log.info("创建文件失败, {}", e.getMessage(), e);
             }
             if (newFile) {
-                log.info("Create file [{}] success", file.getAbsolutePath());
+                log.info("创建文件[{}]成功", file.getAbsolutePath());
             }
         }
     }
@@ -788,6 +788,8 @@ public final class FileUtils {
             return;
         }
         Path sourceDir = Paths.get(in);
+        File outParentFile = new File(out).getParentFile();
+        createDir(outParentFile.toString());
         Path targetFile = Paths.get(out);
         try {
             try (Stream<Path> walk = Files.walk(sourceDir)) {
