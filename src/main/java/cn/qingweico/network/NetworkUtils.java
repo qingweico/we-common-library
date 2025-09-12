@@ -6,6 +6,7 @@ import cn.hutool.json.JSONUtil;
 import cn.qingweico.model.Poem;
 import cn.qingweico.model.RequestConfigOptions;
 import cn.qingweico.network.http.HttpInvocationHandler;
+import com.google.common.io.Closeables;
 import com.google.gson.JsonParser;
 import com.google.gson.JsonSyntaxException;
 import lombok.extern.slf4j.Slf4j;
@@ -24,14 +25,12 @@ import org.apache.http.entity.StringEntity;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClientBuilder;
 import org.apache.http.impl.client.HttpClients;
+import org.apache.http.impl.client.LaxRedirectStrategy;
 import org.apache.http.message.BasicNameValuePair;
 import org.apache.http.util.EntityUtils;
 import org.springframework.util.Assert;
 
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStreamReader;
-import java.io.UnsupportedEncodingException;
+import java.io.*;
 import java.lang.reflect.Proxy;
 import java.net.*;
 import java.nio.charset.Charset;
@@ -215,6 +214,7 @@ public class NetworkUtils {
 
     /**
      * 从API获取每日推荐诗词
+     *
      * @return Poem
      */
     public static Poem fetchDailyRecommendedPoem() {
@@ -266,5 +266,41 @@ public class NetworkUtils {
         HttpResponse httpResponse = proxyClient.execute(httpPost);
         HttpEntity httpEntity = httpResponse.getEntity();
         return EntityUtils.toString(httpEntity, StandardCharsets.UTF_8);
+    }
+
+    public static InputStream getInputStreamByUrl(String url, boolean downloadFully) throws IOException {
+        CloseableHttpClient client = null;
+        CloseableHttpResponse response = null;
+        try {
+            // URL中文件名称带有空格(LaxRedirectStrategy不起作用或者禁用重定向手动处理空格)
+            client = HttpClients.custom()
+                    .setRedirectStrategy(new LaxRedirectStrategy())
+                    //.disableRedirectHandling()
+                    .build();
+            HttpGet request = new HttpGet(url);
+            request.setHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+            response = client.execute(request);
+            if (downloadFully) {
+                byte[] data = EntityUtils.toByteArray(response.getEntity());
+                // Downloads complete and closes connection automatically
+                Closeables.close(response, true);
+                Closeables.close(client, true);
+                return new ByteArrayInputStream(data);
+            }
+            return response.getEntity().getContent();
+        } catch (IOException e) {
+            try {
+                Closeables.close(response, false);
+                Closeables.close(client, false);
+            } catch (IOException ignored) {
+                log.error(e.getMessage(), e);
+            }
+            throw new IOException("Failed to get input stream from URL: " + url, e);
+        }
+        // Do not close response or client stream, and closed by the caller
+    }
+
+    public static InputStream getInputStreamByUrl(String url) throws IOException {
+        return getInputStreamByUrl(url, false);
     }
 }

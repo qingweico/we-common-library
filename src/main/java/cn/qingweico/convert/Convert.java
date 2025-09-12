@@ -1,7 +1,15 @@
 package cn.qingweico.convert;
 
+import cn.hutool.core.util.StrUtil;
 import cn.qingweico.constants.Symbol;
+import cn.qingweico.model.enums.ConversionMethod;
+import org.apache.commons.io.FileUtils;
 import org.apache.commons.lang3.StringUtils;
+import org.apache.commons.lang3.time.DurationFormatUtils;
+import org.joda.time.Duration;
+import org.joda.time.Period;
+import org.joda.time.format.PeriodFormatter;
+import org.joda.time.format.PeriodFormatterBuilder;
 
 import java.math.BigDecimal;
 import java.math.BigInteger;
@@ -20,6 +28,10 @@ import java.util.stream.Collectors;
  */
 public class Convert {
 
+    private static final long KB = 1024;
+    private static final long MB = KB * 1024;
+    private static final long GB = MB * 1024;
+    private static final long TB = GB * 1024;
     private static final String DEFAULT_DATE_FORMAT_STRING = "yyyy-MM-dd";
     private static final ThreadLocal<SimpleDateFormat> DEFAULT_DATE_FORMAT_THREAD_LOCAL = new ThreadLocal<>();
 
@@ -106,11 +118,10 @@ public class Convert {
     }
 
 
-
     /**
      * 将日期根据指定格式转换为字符串
      *
-     * @param date 给定的 Date 类型的日期
+     * @param date   给定的 Date 类型的日期
      * @param format 格式
      * @return format后的String
      */
@@ -126,8 +137,8 @@ public class Convert {
     /**
      * 将日期字符串转换为指定格式
      *
-     * @param dateStr 字符串形式的date
-     * @param strFormat 当前字符串所属的日期格式
+     * @param dateStr      字符串形式的date
+     * @param strFormat    当前字符串所属的日期格式
      * @param targetFormat 想要转换为的日期格式
      * @return String类型的日期格式
      */
@@ -138,6 +149,7 @@ public class Convert {
 
     /**
      * 将一个整数拆分为指定数量的批次, 尽可能均匀分配余数
+     *
      * @param value 要拆分的整数值, 必须是非负整数(value >= 0)
      * @param batch 要拆分的批次数量, 必须是正整数(batch > 0)
      * @return 包含拆分结果的数组
@@ -166,6 +178,7 @@ public class Convert {
 
     /**
      * 将各种类型的数值对象安全地转换为 {@link BigDecimal} 类型
+     *
      * @param obj The object to be converted
      * @return BigDecimal obj
      */
@@ -202,6 +215,7 @@ public class Convert {
 
     /**
      * 将输入字符串中的字母转换为小写, 并升序排列
+     *
      * @param s 待处理的字符串
      * @return 仅含小写字母, 按升序排列
      */
@@ -211,7 +225,8 @@ public class Convert {
 
     /**
      * 将输入字符串中的字母转换为小写, 并排序
-     * @param s 待处理的字符串
+     *
+     * @param s   待处理的字符串
      * @param des 是否倒序
      * @return 仅含小写字母, 并排序
      */
@@ -250,6 +265,72 @@ public class Convert {
         list.sort((a, b) -> des ? b - a : a - b);
         return list.stream().map(String::valueOf).collect(Collectors.joining());
     }
+
+    /**
+     * @see FileUtils#byteCountToDisplaySize(long)
+     */
+    public static String byteCountToDisplaySize(long bytes) {
+        if (bytes >= TB) {
+            return format(bytes, TB, "TB");
+        } else if (bytes >= GB) {
+            return format(bytes, GB, "GB");
+        } else if (bytes >= MB) {
+            return format(bytes, MB, "MB");
+        } else if (bytes >= KB) {
+            return format(bytes, KB, "KB");
+        } else {
+            return bytes + " B";
+        }
+    }
+
+    private static String format(long bytes, long unit, String suffix) {
+        double value = (double) bytes / unit;
+        DecimalFormat decimalFormat = new DecimalFormat("#.##");
+        return decimalFormat.format(value) + StrUtil.SPACE + suffix;
+    }
+
+    public static String convertMills(long milliseconds, ConversionMethod method) {
+        switch (method) {
+            case COMMONS -> {
+                return commonsImpl(milliseconds);
+            }
+            case JODA -> {
+                return jodaImpl(milliseconds);
+            }
+            case JDK -> {
+                return jdkImpl(milliseconds);
+            }
+            default -> throw new IllegalArgumentException("Unsupported conversion method: " + method);
+        }
+    }
+
+    public static String convertMills(long milliseconds) {
+        return convertMills(milliseconds, ConversionMethod.JDK);
+    }
+
+    private static String commonsImpl(long milliseconds) {
+        return DurationFormatUtils.formatDuration(milliseconds, "HH小时mm分钟ss秒SSS毫秒");
+    }
+
+    private static String jodaImpl(long milliseconds) {
+        Duration duration = new Duration(milliseconds);
+        Period period = duration.toPeriod();
+        PeriodFormatter formatter = new PeriodFormatterBuilder().printZeroAlways().appendHours().appendSuffix("小时").appendMinutes().appendSuffix("分钟").appendSecondsWithOptionalMillis().appendSuffix("秒").toFormatter();
+        return formatter.print(period);
+    }
+
+    private static String jdkImpl(long milliseconds) {
+        java.time.Duration jdkDuration = java.time.Duration.ofMillis(milliseconds);
+        long hours = jdkDuration.toHours();
+        jdkDuration = jdkDuration.minusHours(hours);
+        long minutes = jdkDuration.toMinutes();
+        jdkDuration = jdkDuration.minusMinutes(minutes);
+        long seconds = jdkDuration.toSeconds();
+        jdkDuration = jdkDuration.minusSeconds(seconds);
+        long millis = jdkDuration.toMillis();
+        return String.format("%d小时%d分钟%d秒%d毫秒", hours, minutes, seconds, millis);
+    }
+
 
     public static void main(String[] args) {
         System.out.println(toLower("ABCD&&*^&^EFG"));

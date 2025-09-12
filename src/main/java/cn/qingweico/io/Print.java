@@ -193,12 +193,12 @@ public final class Print {
             return;
         }
 
-        if (obj.getClass().isAssignableFrom(Map.class)) {
+        if (Map.class.isAssignableFrom(obj.getClass())) {
             printMap((Map<?, ?>) obj);
             return;
         }
 
-        if (obj.getClass().isAssignableFrom(Collection.class)) {
+        if (Collection.class.isAssignableFrom(obj.getClass())) {
             printColl((Collection<?>) obj);
             return;
         }
@@ -219,5 +219,6 @@ public final class Print {
         }
     }
 
-    private Print() {}
+    private Print() {
+    }
 }

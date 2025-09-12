@@ -6,12 +6,17 @@ import cn.qingweico.concurrent.pool.ThreadPoolBuilder;
 import cn.qingweico.constants.Constants;
 import cn.qingweico.constants.FileSuffixConstants;
 import cn.qingweico.constants.Symbol;
+import cn.qingweico.convert.Convert;
 import cn.qingweico.model.BusinessException;
+import cn.qingweico.model.MergeFileParam;
 import cn.qingweico.network.NetworkUtils;
+import com.google.common.io.ByteStreams;
+import jodd.util.StringUtil;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.codec.binary.Base64;
 import org.apache.commons.io.IOUtils;
 import org.apache.commons.lang3.StringUtils;
+import org.apache.commons.lang3.time.StopWatch;
 import org.jetbrains.annotations.NotNull;
 import org.springframework.util.FastByteArrayOutputStream;
 import org.springframework.util.StreamUtils;
@@ -24,6 +29,7 @@ import java.net.HttpURLConnection;
 import java.net.URISyntaxException;
 import java.net.URL;
 import java.net.URLEncoder;
+import java.nio.channels.AsynchronousFileChannel;
 import java.nio.channels.FileChannel;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
@@ -37,6 +43,8 @@ import java.util.function.Consumer;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
+
+import static com.google.common.base.Preconditions.checkNotNull;
 
 /**
  * 通用的文件处理函数
@@ -767,18 +775,23 @@ public final class FileUtils {
      * @param out 合并到指定的文件
      */
     public static void mergeFile(String in, String out) {
-        mergeFile(in, out, null, null);
+        mergeFile(in, out, MergeFileParam.create());
     }
 
     /**
      * 合并文件夹下所有的文件内容到指定的文件
+     * 不使用多线程,性能提升不了太多且代码难以维护
+     * 可以尝试使用AIO {@link AsynchronousFileChannel} 或者 NIO {@link FileChannel}
+     * 或者先多线程读取到内存中再统一写入
+     * 使用线程池 + 阻塞队列(Customer-Producer模式)
      *
-     * @param in          文件夹路径
-     * @param out         合并到指定的文件
-     * @param fileSuffix  合并时需要排除文件的后缀名称 [".txt", ".sql"]
-     * @param excludeDirs 合并时需要排除的目录 [".git", "node_modules"]
+     * @param in    文件夹路径
+     * @param out   合并到指定的文件
+     * @param param 合并时需要排除文件的后缀名称 [".txt", ".sql"],
+     *              合并时需要排除的目录 [".git", "node_modules"]
+     *              合并时需要排除的文件 ["index.js", "test.txt"]
      */
-    public static void mergeFile(String in, String out, List<String> fileSuffix, List<String> excludeDirs) {
+    public static void mergeFile(String in, String out, MergeFileParam param) {
         if (StringUtils.isEmpty(in)) {
             log.error("in 不能为空");
             return;
@@ -788,6 +801,10 @@ public final class FileUtils {
             return;
         }
         Path sourceDir = Paths.get(in);
+        List<String> ignoredFileSuffixes = param.getIgnoredFileSuffixes();
+        List<String> ignoredDirs = param.getIgnoredDirs();
+        List<String> ignoreFiles = param.getIgnoredFiles();
+        StopWatch sw = StopWatch.createStarted();
         File outParentFile = new File(out).getParentFile();
         createDir(outParentFile.toString());
         Path targetFile = Paths.get(out);
@@ -797,9 +814,11 @@ public final class FileUtils {
                         // 排除根目录
                         .filter(path -> !path.toFile().getAbsolutePath().equals(in))
                         // 排除不需要合并读取的文件夹
-                        .filter(path -> !isExcludedDir(path, excludeDirs))
+                        .filter(path -> !isExcludedDir(path, ignoredDirs))
+                        // 排除不需要合并读取的文件
+                        .filter(path -> !isExcludedFilename(path, ignoreFiles))
                         // 排除不需要合并读取的后缀文件
-                        .filter(path -> !isExcludedFileSuffix(path, fileSuffix))
+                        .filter(path -> !isExcludedFileSuffix(path, ignoredFileSuffixes))
                         .collect(Collectors.groupingBy(Path::getParent,
                                 TreeMap::new, Collectors.toList()));
                 try (BufferedWriter writer = Files.newBufferedWriter(targetFile, StandardCharsets.UTF_8)) {
@@ -811,7 +830,8 @@ public final class FileUtils {
                             try {
                                 if (Files.isRegularFile(file)) {
                                     // 写入文件名
-                                    writer.write("----------" + file.getFileName().toString() + "----------");
+                                    String relativize = sourceDir.relativize(path).toString();
+                                    writer.write("----------" + relativize + "----------");
                                     writer.newLine();
 
                                     // 写入文件内容
@@ -829,45 +849,97 @@ public final class FileUtils {
                                     }
                                     writer.newLine();
                                     merged++;
-                                    log.info("\t\t {}", file.getFileName());
+                                    log.info("\t 文件名称: {} - 文件大小: {}", file.getFileName(),
+                                            Convert.byteCountToDisplaySize(file.toFile().length()));
                                 }
                             } catch (IOException e) {
                                 log.error("文件 {} 写入合并异常, {}", file.getFileName(), e.getMessage());
                             }
                         }
                     }
-                    log.info("文件写入合并结束, 一共 {} 个文件", merged);
+                    log.info("文件写入合并结束, 本次一共合并 {} 个文件", merged);
                 } catch (IOException e) {
                     log.error(e.getMessage(), e);
                     throw new RuntimeException(e);
                 }
+                // 确保文件写入操作完成后再获取文件大小(try块结束时,
+                // BufferedWriter会被自动关闭,并触发close方法,确保
+                // 所有缓冲区中的数据被写入到文件中,并且文件被正确关闭)
+                log.info("合并后的文件大小为: {}", Convert.byteCountToDisplaySize(targetFile.toFile().length()));
             }
+            sw.stop();
+            log.info("合并耗时: {}", Convert.convertMills(sw.getTime()));
         } catch (IOException e) {
             log.error(e.getMessage(), e);
         }
     }
 
-    private static boolean isExcludedDir(Path path, List<String> excludeDirs) {
-        if (excludeDirs == null) {
+    private static boolean isExcludedDir(Path path, List<String> ignoredDirs) {
+        if (ignoredDirs == null) {
             return false;
         }
-        for (String excludeDir : excludeDirs) {
-            if (path.toString().contains(excludeDir)) {
+        // 实际使用时, ignoredDirs不会太多, 没必要使用Set
+        for (String ignoredDir : ignoredDirs) {
+            if (path.toString().contains(ignoredDir)) {
                 return true;
             }
         }
         return false;
     }
 
-    private static boolean isExcludedFileSuffix(Path path, List<String> fileSuffixList) {
-        if (fileSuffixList == null) {
+    private static boolean isExcludedFileSuffix(Path path, List<String> ignoredFileSuffixes) {
+        if (ignoredFileSuffixes == null) {
             return false;
         }
-        for (String fileSuffix : fileSuffixList) {
-            if (path.toString().toLowerCase().endsWith(fileSuffix)) {
+        for (String ignoredFileSuffix : ignoredFileSuffixes) {
+            if (path.toString().toLowerCase().endsWith(ignoredFileSuffix)) {
                 return true;
             }
         }
         return false;
+    }
+
+    private static boolean isExcludedFilename(Path path, List<String> ignoreFiles) {
+        if (ignoreFiles == null) {
+            return false;
+        }
+        for (String ignoreFile : ignoreFiles) {
+            if (StringUtil.equals(path.getFileName().toString(), ignoreFile)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 将文件内容读取到字节数组中
+     *
+     * @param in 读取的文件
+     * @return 字节数组, 如果发生异常则返回空的字节数组
+     * @see ByteStreams
+     * @see com.google.common.io.Files#toByteArray(File)
+     * @see com.google.common.io.MoreFiles
+     * @see com.google.common.io.Resources
+     */
+    @SuppressWarnings("NullAway")
+    public static byte[] toByteArray(File in) {
+        checkNotNull(in);
+        try (InputStream is = Files.newInputStream(in.toPath())) {
+            return ByteStreams.toByteArray(is);
+        } catch (IOException e) {
+            log.error("Failed to read bytes from file: {}", in.getAbsolutePath(), e);
+        }
+        return new byte[0];
+    }
+
+    public static Path getRootpath(Path path) {
+        if (path == null) {
+            return null;
+        }
+        Path parent = path.getParent();
+        if (parent == null) {
+            return path;
+        }
+        return getRootpath(parent);
     }
 }
