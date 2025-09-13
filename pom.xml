@@ -296,11 +296,18 @@
             <artifactId>joda-time</artifactId>
             <version>2.9.9</version>
         </dependency>
+        <!-- Bouncy Castle -->
+        <dependency>
+            <groupId>org.bouncycastle</groupId>
+            <artifactId>bcprov-jdk15on</artifactId>
+            <version>1.70</version>
+        </dependency>
+        <!-- GmSSL-Java -->
         <!-- //////////////////// 日志相关 //////////////////// -->
         <dependency>
             <groupId>ch.qos.logback</groupId>
             <artifactId>logback-classic</artifactId>
-            <version>1.2.3</version>
+            <version>1.5.18</version>
         </dependency>
         <!-- //////////////////// 数据库相关 //////////////////// -->
         <dependency>
