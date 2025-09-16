@@ -29,12 +29,14 @@ import java.net.HttpURLConnection;
 import java.net.URISyntaxException;
 import java.net.URL;
 import java.net.URLEncoder;
+import java.nio.ByteBuffer;
 import java.nio.channels.AsynchronousFileChannel;
 import java.nio.channels.FileChannel;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.nio.file.attribute.FileAttribute;
 import java.nio.file.spi.FileSystemProvider;
 import java.util.*;
 import java.util.concurrent.CountDownLatch;
@@ -658,6 +660,8 @@ public final class FileUtils {
 
     /**
      * 在指定父目录下创建多个文件
+     * {@link Files#createFile(Path, FileAttribute[])} 底层调用 WindowsNativeDispatcher#CreateFile0
+     * 其中调用outputSteam写入文件时如果文件不存在也会调用CreateFile0创建文件
      *
      * @param parent    父目录路径
      * @param filenames 要创建的文件名数组
@@ -678,11 +682,27 @@ public final class FileUtils {
             try {
                 newFile = file.createNewFile();
             } catch (IOException e) {
-                log.info("创建文件失败, {}", e.getMessage(), e);
+                log.error("创建文件失败, {}", e.getMessage(), e);
             }
             if (newFile) {
                 log.info("创建文件[{}]成功", file.getAbsolutePath());
             }
+        }
+    }
+
+    /**
+     * 创建文件
+     *
+     * @param out File out
+     */
+    public static void createFile(File out) {
+        checkNotNull(out);
+        try {
+            if (!out.exists()) {
+                Files.createFile(out.toPath());
+            }
+        } catch (IOException e) {
+            log.error("创建文件 {} 失败, {}", out.getAbsolutePath(), e.getMessage(), e);
         }
     }
 
@@ -941,5 +961,45 @@ public final class FileUtils {
             return path;
         }
         return getRootpath(parent);
+    }
+
+    public static void copyfileByChannel(File in, File out) {
+        checkNotNull(in);
+        checkNotNull(out);
+        // in out 必须存在
+        if (!in.exists()) {
+            log.error("文件 {} 不存在", in.getAbsolutePath());
+            return;
+        }
+        File outParentFile = out.getParentFile();
+        createDir(outParentFile.toString());
+        createFile(out);
+        try (FileChannel readChannel = FileChannel.open(in.toPath(), StandardOpenOption.READ);
+             FileChannel writeChannel = FileChannel.open(out.toPath(), StandardOpenOption.WRITE)) {
+            ByteBuffer buffer = ByteBuffer.allocate(Constants.KB);
+            while (readChannel.read(buffer) != -1) {
+                buffer.flip();
+                writeChannel.write(buffer);
+                buffer.clear();
+            }
+        } catch (IOException e) {
+            log.error(e.getMessage(), e);
+        }
+    }
+
+    public static void copyfileByChannel(String in, String out) {
+        copyfileByChannel(new File(in), new File(out));
+    }
+
+    public static File getParentFile(File in) {
+        checkNotNull(in);
+        File outParentFile = in.getParentFile();
+        // 因为无法从纯文件名中提取父目录, 可能为null
+        if (outParentFile == null) {
+            // 处理绝对路径, 总能找到父目录
+            Path parent = Paths.get(in.getAbsolutePath()).getParent();
+            return parent.toFile();
+        }
+        return outParentFile;
     }
 }
