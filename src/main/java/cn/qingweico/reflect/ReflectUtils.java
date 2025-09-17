@@ -3,6 +3,7 @@ package cn.qingweico.reflect;
 import cn.qingweico.io.Print;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
+import jodd.util.ClassUtil;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.ClassUtils;
 import org.apache.commons.lang3.reflect.ConstructorUtils;
@@ -10,7 +11,6 @@ import org.apache.commons.lang3.reflect.FieldUtils;
 import org.apache.commons.lang3.reflect.MethodUtils;
 
 import javax.annotation.Nonnull;
-import java.lang.invoke.MethodHandles;
 import java.lang.reflect.*;
 import java.util.List;
 import java.util.Map;
@@ -127,9 +127,11 @@ public class ReflectUtils {
     }
 
     /**
+     * {@link java.lang.invoke.MethodHandles.Lookup#lookupClass()} 方法返回的是定义该方法的类,
+     * 而不是调用者的类, 使用 {@link StackTraceElement} 来实现
      * {@code jdk.internal.reflect.Reflection#getCallerClass()}
      */
     public static Class<?> getCallerClass() {
-        return MethodHandles.lookup().lookupClass();
+        return ClassUtil.getCallerClass();
     }
 }

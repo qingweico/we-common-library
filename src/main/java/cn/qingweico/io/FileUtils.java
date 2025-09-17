@@ -2,6 +2,7 @@ package cn.qingweico.io;
 
 
 import cn.hutool.core.io.FileUtil;
+import cn.hutool.core.util.ZipUtil;
 import cn.qingweico.concurrent.pool.ThreadPoolBuilder;
 import cn.qingweico.constants.Constants;
 import cn.qingweico.constants.FileSuffixConstants;
@@ -14,11 +15,14 @@ import com.google.common.io.ByteStreams;
 import jodd.util.StringUtil;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.codec.binary.Base64;
+import org.apache.commons.compress.archivers.ArchiveException;
+import org.apache.commons.compress.archivers.ArchiveStreamFactory;
 import org.apache.commons.io.IOUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.time.StopWatch;
 import org.jetbrains.annotations.NotNull;
 import org.springframework.util.FastByteArrayOutputStream;
+import org.springframework.util.FileCopyUtils;
 import org.springframework.util.StreamUtils;
 
 import javax.servlet.ServletOutputStream;
@@ -45,6 +49,8 @@ import java.util.function.Consumer;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 
@@ -825,7 +831,7 @@ public final class FileUtils {
         List<String> ignoredDirs = param.getIgnoredDirs();
         List<String> ignoreFiles = param.getIgnoredFiles();
         StopWatch sw = StopWatch.createStarted();
-        File outParentFile = new File(out).getParentFile();
+        File outParentFile = getParentFile(new File(out));
         createDir(outParentFile.toString());
         Path targetFile = Paths.get(out);
         try {
@@ -849,28 +855,63 @@ public final class FileUtils {
                         for (Path file : tree.get(path)) {
                             try {
                                 if (Files.isRegularFile(file)) {
-                                    // 写入文件名
-                                    String relativize = sourceDir.relativize(path).toString();
-                                    writer.write("----------" + relativize + "----------");
-                                    writer.newLine();
+                                    boolean isArchiveFile = isArchiveFile(file.toFile());
+                                    if (isArchiveFile) {
+                                        log.info("文件 {} 是压缩包文件, 开始处理...", file.toFile().getAbsolutePath());
+                                        try (ZipFile zipFile = ZipUtil.toZipFile(file.toFile(), StandardCharsets.UTF_8)) {
+                                            Enumeration<? extends ZipEntry> entries = zipFile.entries();
+                                            ZipEntry zipEntry;
+                                            int zipEntries = 0;
+                                            log.info("压缩包文件写入合并开始");
+                                            while (entries.hasMoreElements()) {
+                                                zipEntry = entries.nextElement();
+                                                if (zipEntry.isDirectory() || zipEntry.getSize() == 0L) {
+                                                    continue;
+                                                }
+                                                try (InputStream is = zipFile.getInputStream(zipEntry)) {
+                                                    // 写入文件名
+                                                    writer.write("----------" + zipEntry.getName() + "----------");
+                                                    writer.newLine();
 
-                                    // 写入文件内容
-                                    // BufferedReader reader = Files.newBufferedReader(file)
-                                    // BufferedReader 专门用于读取文本文件, 会尝试将文件内容按字符编码解析为字符串
-                                    // 如果文件内容是二进制数据(如图片、音频、视频等), 使用 BufferedReader 读取时会抛出
-                                    // MalformedInputException 或其他 IOException
-                                    // 如果需要读取二进制文件,使用 FileInputStream 手动构造 BufferedReader
-                                    try (BufferedReader reader = Files.newBufferedReader(file)) {
-                                        String line;
-                                        while ((line = reader.readLine()) != null) {
-                                            writer.write(line);
-                                            writer.newLine();
+                                                    // 写入文件内容
+                                                    byte[] buffer = new byte[FileCopyUtils.BUFFER_SIZE];
+                                                    int length;
+                                                    while ((length = is.read(buffer)) > 0) {
+                                                        writer.write(new String(buffer, 0, length, StandardCharsets.UTF_8));
+                                                        writer.newLine();
+                                                    }
+                                                    writer.newLine();
+                                                    zipEntries++;
+                                                    logFileInfo(zipEntry.getName(), zipEntry.getSize());
+                                                }
+                                            }
+                                            log.info("压缩包文件写入合并结束, 实际读取合并压缩包内共 {} 个文件", zipEntries);
+                                        } catch (IOException e) {
+                                            log.error(e.getMessage(), e);
                                         }
+                                    } else {
+                                        // 写入文件名
+                                        String relativize = sourceDir.relativize(path).toString();
+                                        writer.write("----------" + relativize + "----------");
+                                        writer.newLine();
+
+                                        // 写入文件内容
+                                        // BufferedReader reader = Files.newBufferedReader(file)
+                                        // BufferedReader 专门用于读取文本文件, 会尝试将文件内容按字符编码解析为字符串
+                                        // 如果文件内容是二进制数据(如图片、音频、视频等), 使用 BufferedReader 读取时会抛出
+                                        // MalformedInputException 或其他 IOException
+                                        // 如果需要读取二进制文件,使用 FileInputStream 手动构造 BufferedReader
+                                        try (BufferedReader reader = Files.newBufferedReader(file)) {
+                                            String line;
+                                            while ((line = reader.readLine()) != null) {
+                                                writer.write(line);
+                                                writer.newLine();
+                                            }
+                                        }
+                                        writer.newLine();
+                                        logFileInfo(file.getFileName().toString(), file.toFile().length());
                                     }
-                                    writer.newLine();
                                     merged++;
-                                    log.info("\t 文件名称: {} - 文件大小: {}", file.getFileName(),
-                                            Convert.byteCountToDisplaySize(file.toFile().length()));
                                 }
                             } catch (IOException e) {
                                 log.error("文件 {} 写入合并异常, {}", file.getFileName(), e.getMessage());
@@ -893,6 +934,11 @@ public final class FileUtils {
             log.error(e.getMessage(), e);
         }
     }
+
+    private static void logFileInfo(String fileName, long size) {
+        log.info("\t 文件名称: {} - 文件大小: {}", fileName, Convert.byteCountToDisplaySize(size));
+    }
+
 
     private static boolean isExcludedDir(Path path, List<String> ignoredDirs) {
         if (ignoredDirs == null) {
@@ -971,7 +1017,7 @@ public final class FileUtils {
             log.error("文件 {} 不存在", in.getAbsolutePath());
             return;
         }
-        File outParentFile = out.getParentFile();
+        File outParentFile = getParentFile(out);
         createDir(outParentFile.toString());
         createFile(out);
         try (FileChannel readChannel = FileChannel.open(in.toPath(), StandardOpenOption.READ);
@@ -992,14 +1038,37 @@ public final class FileUtils {
     }
 
     public static File getParentFile(File in) {
-        checkNotNull(in);
-        File outParentFile = in.getParentFile();
-        // 因为无法从纯文件名中提取父目录, 可能为null
-        if (outParentFile == null) {
+        Objects.requireNonNull(in, "File in not null");
+        File parentFile = in.getParentFile();
+        // 只传入文件名找不到父级目录(因为无法从纯文件名中提取父目录), parentFile 可能为空
+        if (parentFile == null) {
             // 处理绝对路径, 总能找到父目录
             Path parent = Paths.get(in.getAbsolutePath()).getParent();
             return parent.toFile();
         }
-        return outParentFile;
+        return parentFile;
+    }
+
+    /**
+     * 检查一个File是否是一个经过打包后的文件
+     * Archive file: 通常指打包后的文件(如 .zip、.rar、.tar、.jar等格式),可能包含多个文件和文件夹
+     * 读取文件的开头部分(签名)来确定文件类型
+     * 如果文件的签名不匹配已知的压缩文件类型, 抛出 {@link ArchiveException}
+     *
+     * @param file 需要检查的文件
+     * @return 是否为 archive file
+     */
+    private static boolean isArchiveFile(File file) {
+        if (file == null || !file.exists() || !file.isFile()) {
+            return false;
+        }
+        // add more...
+        List<String> archiveFileTypes = List.of(ArchiveStreamFactory.ZIP, ArchiveStreamFactory.JAR);
+        try (FileInputStream fis = new FileInputStream(file); BufferedInputStream bis = new BufferedInputStream(fis)) {
+            return archiveFileTypes.contains(ArchiveStreamFactory.detect(bis));
+        } catch (IOException | ArchiveException e) {
+            // No Archiver found for the stream signature, ignored
+            return false;
+        }
     }
 }
