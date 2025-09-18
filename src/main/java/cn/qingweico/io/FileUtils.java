@@ -71,6 +71,12 @@ public final class FileUtils {
     static ExecutorService pool = ThreadPoolBuilder.builder().build();
 
     /**
+     * {@link ArchiveStreamFactory#detect(InputStream)}
+     * deps on {@link ArchiveStreamFactory#getInputStreamArchiveNames}, rather than {@link ArchiveStreamFactory#getOutputStreamArchiveNames()}
+     */
+    static Set<String> archiveFileTypes = ArchiveStreamFactory.findAvailableArchiveInputStreamProviders().keySet();
+
+    /**
      * Read file and put in the ArrayList
      *
      * @param filename {@code String} filename
@@ -1062,10 +1068,9 @@ public final class FileUtils {
         if (file == null || !file.exists() || !file.isFile()) {
             return false;
         }
-        // add more...
-        List<String> archiveFileTypes = List.of(ArchiveStreamFactory.ZIP, ArchiveStreamFactory.JAR);
+        Set<String> localArchiveFileTypes = archiveFileTypes;
         try (FileInputStream fis = new FileInputStream(file); BufferedInputStream bis = new BufferedInputStream(fis)) {
-            return archiveFileTypes.contains(ArchiveStreamFactory.detect(bis));
+            return localArchiveFileTypes.contains(ArchiveStreamFactory.detect(bis));
         } catch (IOException | ArchiveException e) {
             // No Archiver found for the stream signature, ignored
             return false;
