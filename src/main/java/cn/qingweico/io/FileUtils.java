@@ -17,6 +17,11 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.codec.binary.Base64;
 import org.apache.commons.compress.archivers.ArchiveException;
 import org.apache.commons.compress.archivers.ArchiveStreamFactory;
+import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
+import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
+import org.apache.commons.compress.compressors.CompressorException;
+import org.apache.commons.compress.compressors.CompressorStreamFactory;
+import org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream;
 import org.apache.commons.io.IOUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.time.StopWatch;
@@ -49,6 +54,7 @@ import java.util.function.Consumer;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
+import java.util.zip.GZIPInputStream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
@@ -74,7 +80,9 @@ public final class FileUtils {
      * {@link ArchiveStreamFactory#detect(InputStream)}
      * deps on {@link ArchiveStreamFactory#getInputStreamArchiveNames}, rather than {@link ArchiveStreamFactory#getOutputStreamArchiveNames()}
      */
-    static Set<String> archiveFileTypes = ArchiveStreamFactory.findAvailableArchiveInputStreamProviders().keySet();
+    static Set<String> archiveFileTypes = ArchiveStreamFactory.DEFAULT.getInputStreamArchiveNames();
+
+    static Set<String> compressFileTypes = new CompressorStreamFactory().getInputStreamCompressorNames();
 
     /**
      * Read file and put in the ArrayList
@@ -856,45 +864,17 @@ public final class FileUtils {
                 try (BufferedWriter writer = Files.newBufferedWriter(targetFile, StandardCharsets.UTF_8)) {
                     int merged = 0;
                     log.info("文件写入合并开始");
-                    for (Path path : tree.keySet()) {
-                        log.info("{}", path.toFile().getAbsolutePath());
-                        for (Path file : tree.get(path)) {
+                    File file;
+                    for (Path kp : tree.keySet()) {
+                        log.info("{}", kp.toFile().getAbsolutePath());
+                        for (Path path : tree.get(kp)) {
+                            file = path.toFile();
                             try {
-                                if (Files.isRegularFile(file)) {
-                                    boolean isArchiveFile = isArchiveFile(file.toFile());
-                                    if (isArchiveFile) {
-                                        log.info("文件 {} 是压缩包文件, 开始处理...", file.toFile().getAbsolutePath());
-                                        try (ZipFile zipFile = ZipUtil.toZipFile(file.toFile(), StandardCharsets.UTF_8)) {
-                                            Enumeration<? extends ZipEntry> entries = zipFile.entries();
-                                            ZipEntry zipEntry;
-                                            int zipEntries = 0;
-                                            log.info("压缩包文件写入合并开始");
-                                            while (entries.hasMoreElements()) {
-                                                zipEntry = entries.nextElement();
-                                                if (zipEntry.isDirectory() || zipEntry.getSize() == 0L) {
-                                                    continue;
-                                                }
-                                                try (InputStream is = zipFile.getInputStream(zipEntry)) {
-                                                    // 写入文件名
-                                                    writer.write("----------" + zipEntry.getName() + "----------");
-                                                    writer.newLine();
-
-                                                    // 写入文件内容
-                                                    byte[] buffer = new byte[FileCopyUtils.BUFFER_SIZE];
-                                                    int length;
-                                                    while ((length = is.read(buffer)) > 0) {
-                                                        writer.write(new String(buffer, 0, length, StandardCharsets.UTF_8));
-                                                        writer.newLine();
-                                                    }
-                                                    writer.newLine();
-                                                    zipEntries++;
-                                                    logFileInfo(zipEntry.getName(), zipEntry.getSize());
-                                                }
-                                            }
-                                            log.info("压缩包文件写入合并结束, 实际读取合并压缩包内共 {} 个文件", zipEntries);
-                                        } catch (IOException e) {
-                                            log.error(e.getMessage(), e);
-                                        }
+                                if (Files.isRegularFile(path)) {
+                                    if (isArchiveFile(file)) {
+                                        handleArchiveFile(file, writer);
+                                    } else if (isCompressFile(file)) {
+                                        handleCompressFile(file, writer);
                                     } else {
                                         // 写入文件名
                                         String relativize = sourceDir.relativize(path).toString();
@@ -907,7 +887,7 @@ public final class FileUtils {
                                         // 如果文件内容是二进制数据(如图片、音频、视频等), 使用 BufferedReader 读取时会抛出
                                         // MalformedInputException 或其他 IOException
                                         // 如果需要读取二进制文件,使用 FileInputStream 手动构造 BufferedReader
-                                        try (BufferedReader reader = Files.newBufferedReader(file)) {
+                                        try (BufferedReader reader = Files.newBufferedReader(path)) {
                                             String line;
                                             while ((line = reader.readLine()) != null) {
                                                 writer.write(line);
@@ -915,12 +895,12 @@ public final class FileUtils {
                                             }
                                         }
                                         writer.newLine();
-                                        logFileInfo(file.getFileName().toString(), file.toFile().length());
+                                        logFileInfo(path.getFileName().toString(), path.toFile().length());
                                     }
                                     merged++;
                                 }
                             } catch (IOException e) {
-                                log.error("文件 {} 写入合并异常, {}", file.getFileName(), e.getMessage());
+                                log.error("文件 {} 写入合并异常, {}", path.getFileName(), e.getMessage());
                             }
                         }
                     }
@@ -1059,7 +1039,7 @@ public final class FileUtils {
      * 检查一个File是否是一个经过打包后的文件
      * Archive file: 通常指打包后的文件(如 .zip、.rar、.tar、.jar等格式),可能包含多个文件和文件夹
      * 读取文件的开头部分(签名)来确定文件类型
-     * 如果文件的签名不匹配已知的压缩文件类型, 抛出 {@link ArchiveException}
+     * 如果文件的签名不匹配已知的归档文件类型, 抛出 {@link ArchiveException}
      *
      * @param file 需要检查的文件
      * @return 是否为 archive file
@@ -1075,5 +1055,123 @@ public final class FileUtils {
             // No Archiver found for the stream signature, ignored
             return false;
         }
+    }
+
+    public static boolean isArchiveFile(InputStream is) {
+        Set<String> localArchiveFileTypes = archiveFileTypes;
+        try (BufferedInputStream bis = new BufferedInputStream(is)) {
+            return localArchiveFileTypes.contains(ArchiveStreamFactory.detect(bis));
+        } catch (IOException | ArchiveException e) {
+            // No Archiver found for the stream signature, ignored
+            return false;
+        }
+    }
+
+    /**
+     * 检查一个File是否是一个经过压缩后的文件
+     *
+     * @param file 需要检查的文件
+     * @return 是否为 compress file
+     * @see GZIPInputStream
+     * @see #isArchiveFile
+     */
+    public static boolean isCompressFile(File file) {
+        if (file == null || !file.exists() || !file.isFile()) {
+            return false;
+        }
+        Set<String> localCompressFileTypes = compressFileTypes;
+        try (FileInputStream fis = new FileInputStream(file);
+             BufferedInputStream bis = new BufferedInputStream(fis)) {
+            return localCompressFileTypes.contains(CompressorStreamFactory.detect(bis));
+        } catch (IOException | CompressorException e) {
+            // No Compressor found for the stream signature, ignored
+            return false;
+        }
+    }
+
+    public static boolean isCompressFile(InputStream is) {
+        Set<String> localCompressFileTypes = compressFileTypes;
+        try (BufferedInputStream bis = new BufferedInputStream(is)) {
+            return localCompressFileTypes.contains(CompressorStreamFactory.detect(bis));
+        } catch (IOException | CompressorException e) {
+            // No Compressor found for the stream signature, ignored
+            return false;
+        }
+    }
+
+    private static void handleArchiveFile(File file, BufferedWriter writer) {
+        log.info("文件 {} 是归档文件, 开始处理...", file.getAbsolutePath());
+        try (ZipFile zipFile = ZipUtil.toZipFile(file, StandardCharsets.UTF_8)) {
+            Enumeration<? extends ZipEntry> entries = zipFile.entries();
+            ZipEntry entry;
+            int archiveEntries = 0;
+            log.info("归档文件写入合并开始");
+            while (entries.hasMoreElements()) {
+                entry = entries.nextElement();
+                if (entry.isDirectory() || entry.getSize() == 0L) {
+                    continue;
+                }
+                try (InputStream inputStream = zipFile.getInputStream(entry)) {
+                    // 使用独立的流判断文件类型, 避免原始流的内部状态被破坏
+                    ByteArrayInputStream copiedInputStream = new ByteArrayInputStream(IOUtils.toByteArray(inputStream));
+                    if (isArchiveFile(copiedInputStream)) {
+                        // 处理嵌套的归档文件
+                        log.info("嵌套的归档文件 {}", entry.getName());
+                    } else {
+                        doWrite(writer, inputStream, entry.getName());
+                        archiveEntries++;
+                        logFileInfo(entry.getName(), entry.getSize());
+                    }
+                }
+            }
+            log.info("归档文件写入合并结束, 实际读取合并归档包内共 {} 个文件", archiveEntries);
+        } catch (IOException e) {
+            log.error(e.getMessage(), e);
+        }
+    }
+
+
+    private static void handleCompressFile(File file, BufferedWriter writer) {
+        log.info("文件 {} 是压缩文件, 开始处理...", file.getAbsolutePath());
+        try (FileInputStream fis = new FileInputStream(file);
+             BufferedInputStream bis = new BufferedInputStream(fis);
+             GzipCompressorInputStream gzip = new GzipCompressorInputStream(bis);
+             TarArchiveInputStream inputStream = new TarArchiveInputStream(gzip)) {
+            TarArchiveEntry entry;
+            int compressEntries = 0;
+            log.info("压缩文件写入合并开始");
+            while ((entry = inputStream.getNextEntry()) != null) {
+                if (entry.isDirectory() || entry.getSize() == 0L) {
+                    continue;
+                }
+                ByteArrayInputStream copiedInputStream = new ByteArrayInputStream(IOUtils.toByteArray(inputStream));
+                if (isCompressFile(copiedInputStream)) {
+                    // 处理嵌套的压缩文件
+                    log.info("嵌套的压缩文件 {}", entry.getName());
+                } else {
+                    doWrite(writer, inputStream, entry.getName());
+                    compressEntries++;
+                    logFileInfo(entry.getName(), entry.getSize());
+                }
+            }
+            log.info("压缩文件写入合并结束, 实际读取合并压缩包内共 {} 个文件", compressEntries);
+        } catch (IOException e) {
+            log.error(e.getMessage(), e);
+        }
+    }
+
+    private static void doWrite(BufferedWriter writer, InputStream inputStream, String entryName) throws IOException {
+        // 写入文件名
+        writer.write("----------" + entryName + "----------");
+        writer.newLine();
+
+        // 写入文件内容
+        byte[] buffer = new byte[FileCopyUtils.BUFFER_SIZE];
+        int length;
+        while ((length = inputStream.read(buffer)) > 0) {
+            writer.write(new String(buffer, 0, length, StandardCharsets.UTF_8));
+            writer.newLine();
+        }
+        writer.newLine();
     }
 }
