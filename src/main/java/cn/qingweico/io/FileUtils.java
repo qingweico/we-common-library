@@ -2,29 +2,31 @@ package cn.qingweico.io;
 
 
 import cn.hutool.core.io.FileUtil;
-import cn.hutool.core.util.ZipUtil;
 import cn.qingweico.concurrent.pool.ThreadPoolBuilder;
 import cn.qingweico.constants.Constants;
 import cn.qingweico.constants.FileSuffixConstants;
 import cn.qingweico.constants.Symbol;
 import cn.qingweico.convert.Convert;
-import cn.qingweico.model.BusinessException;
-import cn.qingweico.model.MergeFileParam;
+import cn.qingweico.model.*;
 import cn.qingweico.network.NetworkUtils;
 import com.google.common.io.ByteStreams;
+import com.google.common.io.MoreFiles;
+import com.google.common.io.Resources;
 import jodd.util.StringUtil;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.codec.binary.Base64;
 import org.apache.commons.compress.archivers.ArchiveException;
 import org.apache.commons.compress.archivers.ArchiveStreamFactory;
-import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
 import org.apache.commons.compress.compressors.CompressorException;
 import org.apache.commons.compress.compressors.CompressorStreamFactory;
 import org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream;
+import org.apache.commons.io.IOExceptionList;
 import org.apache.commons.io.IOUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.time.StopWatch;
+import org.apache.poi.poifs.filesystem.FileMagic;
+import org.apache.tika.Tika;
 import org.jetbrains.annotations.NotNull;
 import org.springframework.util.FastByteArrayOutputStream;
 import org.springframework.util.FileCopyUtils;
@@ -55,8 +57,7 @@ import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import java.util.zip.GZIPInputStream;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipFile;
+import java.util.zip.ZipInputStream;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 
@@ -83,6 +84,10 @@ public final class FileUtils {
     static Set<String> archiveFileTypes = ArchiveStreamFactory.DEFAULT.getInputStreamArchiveNames();
 
     static Set<String> compressFileTypes = new CompressorStreamFactory().getInputStreamCompressorNames();
+
+    static Tika tika = new Tika();
+    // add more...
+    static List<FileMagic> ignoredFileMagics = List.of(FileMagic.PDF, FileMagic.OOXML);
 
     /**
      * Read file and put in the ArrayList
@@ -970,8 +975,8 @@ public final class FileUtils {
      * @return 字节数组, 如果发生异常则返回空的字节数组
      * @see ByteStreams
      * @see com.google.common.io.Files#toByteArray(File)
-     * @see com.google.common.io.MoreFiles
-     * @see com.google.common.io.Resources
+     * @see MoreFiles
+     * @see Resources
      */
     @SuppressWarnings("NullAway")
     public static byte[] toByteArray(File in) {
@@ -1044,22 +1049,21 @@ public final class FileUtils {
      * @param file 需要检查的文件
      * @return 是否为 archive file
      */
-    private static boolean isArchiveFile(File file) {
+    private static boolean isArchiveFile(File file) throws IOException {
         if (file == null || !file.exists() || !file.isFile()) {
             return false;
         }
-        Set<String> localArchiveFileTypes = archiveFileTypes;
-        try (FileInputStream fis = new FileInputStream(file); BufferedInputStream bis = new BufferedInputStream(fis)) {
-            return localArchiveFileTypes.contains(ArchiveStreamFactory.detect(bis));
-        } catch (IOException | ArchiveException e) {
-            // No Archiver found for the stream signature, ignored
-            return false;
-        }
+        return isArchiveFile(new FileInputStream(file));
     }
 
-    public static boolean isArchiveFile(InputStream is) {
+    public static boolean isArchiveFile(InputStream is) throws IOException {
+        // PPTX文件虽然本质上是ZIP格式, 但是使用ZipInputStream处理不了, 忽略
+        byte[] original = IOUtils.toByteArray(is);
+        if (isIgnoredFile(new ByteArrayInputStream(original))) {
+            return false;
+        }
         Set<String> localArchiveFileTypes = archiveFileTypes;
-        try (BufferedInputStream bis = new BufferedInputStream(is)) {
+        try (BufferedInputStream bis = new BufferedInputStream(new ByteArrayInputStream(original))) {
             return localArchiveFileTypes.contains(ArchiveStreamFactory.detect(bis));
         } catch (IOException | ArchiveException e) {
             // No Archiver found for the stream signature, ignored
@@ -1075,18 +1079,11 @@ public final class FileUtils {
      * @see GZIPInputStream
      * @see #isArchiveFile
      */
-    public static boolean isCompressFile(File file) {
+    public static boolean isCompressFile(File file) throws FileNotFoundException {
         if (file == null || !file.exists() || !file.isFile()) {
             return false;
         }
-        Set<String> localCompressFileTypes = compressFileTypes;
-        try (FileInputStream fis = new FileInputStream(file);
-             BufferedInputStream bis = new BufferedInputStream(fis)) {
-            return localCompressFileTypes.contains(CompressorStreamFactory.detect(bis));
-        } catch (IOException | CompressorException e) {
-            // No Compressor found for the stream signature, ignored
-            return false;
-        }
+        return isCompressFile(new FileInputStream(file));
     }
 
     public static boolean isCompressFile(InputStream is) {
@@ -1101,30 +1098,17 @@ public final class FileUtils {
 
     private static void handleArchiveFile(File file, BufferedWriter writer) {
         log.info("文件 {} 是归档文件, 开始处理...", file.getAbsolutePath());
-        try (ZipFile zipFile = ZipUtil.toZipFile(file, StandardCharsets.UTF_8)) {
-            Enumeration<? extends ZipEntry> entries = zipFile.entries();
-            ZipEntry entry;
-            int archiveEntries = 0;
+        try (ZipInputStream zis = new ZipInputStream(new FileInputStream(file))) {
             log.info("归档文件写入合并开始");
-            while (entries.hasMoreElements()) {
-                entry = entries.nextElement();
-                if (entry.isDirectory() || entry.getSize() == 0L) {
-                    continue;
-                }
-                try (InputStream inputStream = zipFile.getInputStream(entry)) {
-                    // 使用独立的流判断文件类型, 避免原始流的内部状态被破坏
-                    ByteArrayInputStream copiedInputStream = new ByteArrayInputStream(IOUtils.toByteArray(inputStream));
-                    if (isArchiveFile(copiedInputStream)) {
-                        // 处理嵌套的归档文件
-                        log.info("嵌套的归档文件 {}", entry.getName());
-                    } else {
-                        doWrite(writer, inputStream, entry.getName());
-                        archiveEntries++;
-                        logFileInfo(entry.getName(), entry.getSize());
-                    }
-                }
-            }
-            log.info("归档文件写入合并结束, 实际读取合并归档包内共 {} 个文件", archiveEntries);
+            doWrite(new ZipArchiveReader(zis), null, writer);
+        } catch (IOException e) {
+            log.error(e.getMessage(), e);
+        }
+    }
+
+    private static void handleNestedArchiveFile(byte[] oba, BufferedWriter writer, String rootEntryName) {
+        try (ZipInputStream zis = new ZipInputStream(new ByteArrayInputStream(oba))) {
+            doWrite(new ZipArchiveReader(zis), rootEntryName, writer);
         } catch (IOException e) {
             log.error(e.getMessage(), e);
         }
@@ -1137,28 +1121,76 @@ public final class FileUtils {
              BufferedInputStream bis = new BufferedInputStream(fis);
              GzipCompressorInputStream gzip = new GzipCompressorInputStream(bis);
              TarArchiveInputStream inputStream = new TarArchiveInputStream(gzip)) {
-            TarArchiveEntry entry;
-            int compressEntries = 0;
             log.info("压缩文件写入合并开始");
-            while ((entry = inputStream.getNextEntry()) != null) {
-                if (entry.isDirectory() || entry.getSize() == 0L) {
-                    continue;
-                }
-                ByteArrayInputStream copiedInputStream = new ByteArrayInputStream(IOUtils.toByteArray(inputStream));
-                if (isCompressFile(copiedInputStream)) {
-                    // 处理嵌套的压缩文件
-                    log.info("嵌套的压缩文件 {}", entry.getName());
-                } else {
-                    doWrite(writer, inputStream, entry.getName());
-                    compressEntries++;
-                    logFileInfo(entry.getName(), entry.getSize());
-                }
-            }
-            log.info("压缩文件写入合并结束, 实际读取合并压缩包内共 {} 个文件", compressEntries);
+            doWrite(new TarArchiveReader(inputStream), null, writer);
         } catch (IOException e) {
             log.error(e.getMessage(), e);
         }
     }
+
+    private static void handleNestedCompressFile(byte[] oba, BufferedWriter writer, String rootEntryName) {
+        // 先解压 GZIP 格式的数据流, 再读取 tar 归档文件
+        // 顺序不可写反 .tar.gz -> GZIPInputStream -> TarArchiveInputStream -> 读取 tar entry 即 new TarArchiveInputStream(new GZIPInputStream(...))
+        // 不能写成 new GZIPInputStream(new TarArchiveInputStream(...))
+        try (TarArchiveInputStream inputStream = new TarArchiveInputStream
+                (new GZIPInputStream(new ByteArrayInputStream(oba)))) {
+            doWrite(new TarArchiveReader(inputStream), rootEntryName, writer);
+        } catch (IOException e) {
+            log.error(e.getMessage(), e);
+        }
+    }
+
+    private static void doWrite(ArchiveReader reader,
+                                String rootEntryName,
+                                BufferedWriter writer) throws IOException {
+        ArchiveEntryWrapper entry;
+        int entries = 0;
+        byte[] original;
+        String entryName;
+        ByteArrayInputStream detectCompressFileStream = null;
+        ByteArrayInputStream detectArchiveFileStream = null;
+        ByteArrayInputStream detectIgnoredFileStream = null;
+        ByteArrayInputStream writerInputStream = null;
+        while ((entry = reader.getNextEntry()) != null) {
+            if (entry.directory() || entry.size() == 0L) {
+                continue;
+            }
+            if (rootEntryName != null) {
+                // nested
+                entryName = rootEntryName + IOUtils.DIR_SEPARATOR_UNIX + entry.name();
+            } else {
+                entryName = entry.name();
+            }
+
+            original = reader.readEntry();
+            detectCompressFileStream = new ByteArrayInputStream(original);
+            detectArchiveFileStream = new ByteArrayInputStream(original);
+            detectIgnoredFileStream = new ByteArrayInputStream(original);
+            if (isIgnoredFile(detectIgnoredFileStream)) {
+                continue;
+            }
+            if (isCompressFile(detectCompressFileStream)) {
+                log.info("嵌套的压缩文件 {}", entryName);
+                handleNestedCompressFile(original, writer, entryName);
+            } else if (isArchiveFile(detectArchiveFileStream)) {
+                log.info("嵌套的归档文件 {}", entryName);
+                handleNestedArchiveFile(original, writer, entryName);
+            } else {
+                writerInputStream = new ByteArrayInputStream(original);
+                doWrite(writer, writerInputStream, entryName);
+                // entry.size() = -1B?
+                logFileInfo(entryName, original.length);
+            }
+            entries++;
+        }
+        log.info("写入合并结束, 实际读取合并共 {} 个文件", entries);
+        try {
+            IOUtils.close(detectCompressFileStream, detectArchiveFileStream, detectIgnoredFileStream, writerInputStream);
+        } catch (IOExceptionList e) {
+            log.error(e.getMessage(), e);
+        }
+    }
+
 
     private static void doWrite(BufferedWriter writer, InputStream inputStream, String entryName) throws IOException {
         // 写入文件名
@@ -1173,5 +1205,30 @@ public final class FileUtils {
             writer.newLine();
         }
         writer.newLine();
+    }
+
+    /**
+     * 使用apache.tika检测文件类型
+     */
+    public static boolean isIgnoredFile(InputStream inputStream) {
+        try {
+            if (inputStream == null || inputStream.available() == 0) {
+                return false;
+            }
+            inputStream = FileMagic.prepareToCheckMagic(inputStream);
+            inputStream.mark(512);
+            // Java Archive(jar) 也是基于ZIP格式, 也会返回FileMagic.OOXML
+            if (ignoredFileMagics.contains(FileMagic.valueOf(inputStream))) {
+                return false;
+            }
+            inputStream.reset();
+            String mimeType = tika.detect(inputStream);
+            // 可能是PPTX, DOCX或XLSX(这几种文件也忽略)
+            return "application/x-tika-ooxml"
+                    .equals(mimeType);
+        } catch (IOException e) {
+            log.error(e.getMessage(), e);
+            return false;
+        }
     }
 }
