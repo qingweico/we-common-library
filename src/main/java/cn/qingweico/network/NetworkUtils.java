@@ -1,6 +1,7 @@
 package cn.qingweico.network;
 
 import cn.hutool.http.ContentType;
+import cn.hutool.http.Header;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
 import cn.qingweico.model.Poem;
@@ -10,10 +11,7 @@ import com.google.common.io.Closeables;
 import com.google.gson.JsonParser;
 import com.google.gson.JsonSyntaxException;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.http.HttpEntity;
-import org.apache.http.HttpRequestInterceptor;
-import org.apache.http.HttpResponse;
-import org.apache.http.HttpStatus;
+import org.apache.http.*;
 import org.apache.http.client.HttpClient;
 import org.apache.http.client.config.RequestConfig;
 import org.apache.http.client.entity.UrlEncodedFormEntity;
@@ -35,9 +33,7 @@ import java.lang.reflect.Proxy;
 import java.net.*;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.Map;
+import java.util.*;
 
 /**
  * @author zqw
@@ -162,7 +158,7 @@ public class NetworkUtils {
      * @param url         请求 url
      * @param headers     Map<String, String> 请求头
      * @param requestBody { json str }  请求体以 JSON 格式发送, 请求头部为 {@code Content-Type : application/json}
-     *                    发送表单数据, {@code Content-Type : application/x-www-form-urlencoded} {@link UrlEncodedFormEntity} {@link BasicNameValuePair}
+     *                    发送表单数据 : {@code Content-Type : application/x-www-form-urlencoded} {@link UrlEncodedFormEntity} {@link BasicNameValuePair}
      */
     public static void sendPost(String url, Map<String, String> headers, String requestBody) {
         Assert.notNull(url, "url must not be null");
@@ -183,10 +179,24 @@ public class NetworkUtils {
             log.error("{}", e.getCause().getMessage());
         }
     }
+    private static void setHttpPost(HttpPost httpPost, Map<String, String> formKeyValue) {
+        List<NameValuePair> parameters = new ArrayList<>();
+        httpPost.addHeader(Header.CONTENT_TYPE.getValue(), ContentType.FORM_URLENCODED.getValue());
+        if(formKeyValue != null && !formKeyValue.isEmpty()) {
+            formKeyValue.forEach((key, value) -> {
+                BasicNameValuePair basicNameValuePair = new BasicNameValuePair(key, value);
+                parameters.add(basicNameValuePair);
+            });
+        }
+        UrlEncodedFormEntity entity = new UrlEncodedFormEntity(parameters, StandardCharsets.UTF_8);
+        entity.setContentType(ContentType.FORM_URLENCODED.getValue());
+        httpPost.setEntity(entity);
+    }
+
 
     private static void setHttpPost(HttpPost httpPost, Map<String, String> headers, String requestBody, String charset) throws UnsupportedEncodingException {
-        httpPost.addHeader("User-Agent", "Mozilla/5.0");
-        httpPost.addHeader("Content-Type", "application/json");
+        httpPost.addHeader(Header.USER_AGENT.getValue(), "Mozilla/5.0");
+        httpPost.addHeader(Header.CONTENT_TYPE.getValue(), ContentType.JSON.getValue());
         if (headers != null) {
             for (Map.Entry<String, String> entry : headers.entrySet()) {
                 String headerName = entry.getKey();
@@ -195,6 +205,7 @@ public class NetworkUtils {
             }
         }
         StringEntity stringEntity = new StringEntity(requestBody, charset);
+        stringEntity.setContentType(ContentType.JSON.getValue());
         httpPost.setEntity(stringEntity);
     }
 

@@ -12,6 +12,7 @@ import cn.qingweico.network.NetworkUtils;
 import com.google.common.io.ByteStreams;
 import com.google.common.io.MoreFiles;
 import com.google.common.io.Resources;
+import io.rsocket.metadata.WellKnownMimeType;
 import jodd.util.StringUtil;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.codec.binary.Base64;
@@ -28,6 +29,7 @@ import org.apache.commons.lang3.time.StopWatch;
 import org.apache.poi.poifs.filesystem.FileMagic;
 import org.apache.tika.Tika;
 import org.jetbrains.annotations.NotNull;
+import org.json.JSONObject;
 import org.springframework.util.FastByteArrayOutputStream;
 import org.springframework.util.FileCopyUtils;
 import org.springframework.util.StreamUtils;
@@ -468,13 +470,39 @@ public final class FileUtils {
     /**
      * 从URL读取内容
      *
-     * @param url 目标URL
+     * @param url             目标URL
+     * @param requestMethod   请求方式
+     * @param requestProperty 请求属性
      * @return URL返回的内容字符串, 读取失败返回空字符串
      */
-    public static String readUrl(String url) {
+    public static String readUrl(String url, String requestMethod, Map<String, String> requestProperty) {
         HttpURLConnection connection = null;
         try {
+            log.info("请求的URL ===> {}", url);
             connection = (HttpURLConnection) new URL(url).openConnection();
+            connection.setRequestMethod(requestMethod);
+            if (requestProperty != null) {
+                requestProperty.forEach(connection::addRequestProperty);
+                JSONObject requestHeaders = new JSONObject(connection.getRequestProperties());
+                log.info("请求头 ===> {}", requestHeaders.toString(4));
+            }
+            connection.setConnectTimeout(5000);
+            connection.setReadTimeout(10000);
+            // 手动处理重定向
+            connection.setInstanceFollowRedirects(false);
+            // 设置 HTTP 请求的传输模式为分块传输(适用于发送大量数据或流式数据, 可以避免将所有数据缓冲在内存中)
+            // connection.setChunkedStreamingMode(1024);
+            connection.setUseCaches(true);
+            // 设置 HTTP 请求允许从服务器读取数据
+            connection.setDoInput(true);
+            // 设置 HTTP 请求允许发送数据到服务器
+            connection.setDoOutput(true);
+            // 服务器返回给客户端的响应头信息
+            Map<String, List<String>> headerFields = connection.getHeaderFields();
+            JSONObject responseHeaders = new JSONObject();
+            // 响应头的第一行是状态行, 不是一个标准的 HTTP 头, 使用 null 作为key标识
+            headerFields.forEach((key, value) -> responseHeaders.put(Objects.requireNonNullElse(key, "Status"), value));
+            log.info("响应头 ===> {}", responseHeaders.toString(4));
             try (InputStream inputStream = connection.getInputStream();
                  FastByteArrayOutputStream outputStream = new FastByteArrayOutputStream()) {
                 byte[] buffer = new byte[4096];
@@ -560,6 +588,7 @@ public final class FileUtils {
         Consumer<File> consumer = new Consumer<>() {
             @Override
             public void accept(File f) {
+                String fp = f.getAbsoluteFile().toString();
                 if (f.isDirectory()) {
                     File[] children = f.listFiles();
                     if (children != null) {
@@ -567,8 +596,16 @@ public final class FileUtils {
                             this.accept(child);
                         }
                     }
+                    // 删除空的文件夹
+                    if (f.delete()) {
+                        log.info("删除文件目录 ====> {}", fp);
+                    }
+                } else {
+                    // 删除文件
+                    if (f.delete()) {
+                        log.info("删除文件 ====> {}", fp);
+                    }
                 }
-                f.delete();
             }
         };
         consumer.accept(file);
@@ -1217,15 +1254,19 @@ public final class FileUtils {
             }
             inputStream = FileMagic.prepareToCheckMagic(inputStream);
             inputStream.mark(512);
-            // Java Archive(jar) 也是基于ZIP格式, 也会返回FileMagic.OOXML
-            if (ignoredFileMagics.contains(FileMagic.valueOf(inputStream))) {
-                return false;
-            }
+            FileMagic fileMagic = FileMagic.valueOf(inputStream);
             inputStream.reset();
             String mimeType = tika.detect(inputStream);
-            // 可能是PPTX, DOCX或XLSX(这几种文件也忽略)
-            return "application/x-tika-ooxml"
-                    .equals(mimeType);
+            if (fileMagic == FileMagic.OOXML) {
+                // Java Archive(jar) 也是基于ZIP格式, 也会返回FileMagic.OOXML
+                if (WellKnownMimeType.APPLICATION_ZIP.getString().equals(mimeType)) {
+                    return false;
+                }
+                // 可能是PPTX, DOCX或XLSX(这几种文件也忽略)
+                return "application/x-tika-ooxml"
+                        .equals(mimeType);
+            }
+            return ignoredFileMagics.contains(fileMagic);
         } catch (IOException e) {
             log.error(e.getMessage(), e);
             return false;
