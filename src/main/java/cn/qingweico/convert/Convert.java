@@ -1,8 +1,11 @@
 package cn.qingweico.convert;
 
+import cn.hutool.core.text.StrPool;
 import cn.hutool.core.util.StrUtil;
+import cn.hutool.json.JSONUtil;
 import cn.qingweico.constants.Symbol;
 import cn.qingweico.model.enums.ConversionMethod;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.time.DurationFormatUtils;
@@ -10,6 +13,10 @@ import org.joda.time.Duration;
 import org.joda.time.Period;
 import org.joda.time.format.PeriodFormatter;
 import org.joda.time.format.PeriodFormatterBuilder;
+import org.json.JSONException;
+import org.json.JSONObject;
+import org.json.JSONTokener;
+import org.springframework.util.ObjectUtils;
 
 import java.math.BigDecimal;
 import java.math.BigInteger;
@@ -20,12 +27,14 @@ import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.Locale;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
  * @author zqw
  * @date 2025/7/26
  */
+@Slf4j
 public class Convert {
 
     private static final long KB = 1024;
@@ -330,6 +339,32 @@ public class Convert {
         long millis = jdkDuration.toMillis();
         return String.format("%d小时%d分钟%d秒%d毫秒", hours, minutes, seconds, millis);
     }
+
+    public static String prettyJson(Object source) {
+        if (ObjectUtils.isEmpty(source)) {
+            return StrPool.EMPTY_JSON;
+        }
+        try {
+            if (source instanceof String str) {
+                if (JSONUtil.isTypeJSON(str)) {
+                    return new JSONObject(str).toString(4);
+                }
+                return str;
+            }
+            if (source instanceof Map<?, ?> map) {
+                return new JSONObject(map).toString(4);
+            }
+
+            if (source instanceof JSONTokener jsonTokener) {
+                return new JSONObject(jsonTokener).toString(4);
+            }
+            return new JSONObject(source).toString(4);
+        } catch (JSONException e) {
+            log.error(e.getMessage(), e);
+            return source.toString();
+        }
+    }
+
 
 
     public static void main(String[] args) {

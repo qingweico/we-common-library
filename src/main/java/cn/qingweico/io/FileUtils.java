@@ -13,6 +13,7 @@ import com.google.common.io.ByteStreams;
 import com.google.common.io.MoreFiles;
 import com.google.common.io.Resources;
 import io.rsocket.metadata.WellKnownMimeType;
+import jodd.util.StringPool;
 import jodd.util.StringUtil;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.codec.binary.Base64;
@@ -59,6 +60,8 @@ import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import java.util.zip.GZIPInputStream;
+import java.util.zip.GZIPOutputStream;
+import java.util.zip.InflaterOutputStream;
 import java.util.zip.ZipInputStream;
 
 import static com.google.common.base.Preconditions.checkNotNull;
@@ -205,17 +208,17 @@ public final class FileUtils {
     /**
      * 使用 Files 工具类快速读取文件
      *
-     * @param fileName [路径]文件名称
+     * @param filename [路径]文件名称
      * @return 文本字符流
      * 快速写入文件{@link Files#writeString(Path, CharSequence, OpenOption...)}
      */
-    public static String fastReadFile(String fileName, boolean isClassPath) {
+    public static String fastReadFile(String filename, boolean isClassPath) {
         String result;
         // 读取ClassPath路径
         if (isClassPath) {
-            URL url = FileUtils.class.getClassLoader().getResource(fileName);
+            URL url = FileUtils.class.getClassLoader().getResource(filename);
             if (url == null) {
-                log.error("[classpath] : {} not found!", fileName);
+                log.error("[classpath] : 文件 {} 不存在", filename);
                 return Symbol.EMPTY;
             }
             try {
@@ -229,7 +232,7 @@ public final class FileUtils {
         } else {
             // 读取项目根目录路径
             try {
-                result = Files.readString(Paths.get(fileName));
+                result = Files.readString(Paths.get(filename));
             } catch (IOException e) {
                 throw new RuntimeException(e);
             }
@@ -238,7 +241,7 @@ public final class FileUtils {
     }
 
     /**
-     * 快速遍历文件夹并打印出其中所有的文件,
+     * 快速遍历文件夹并打印出其中所有的文件
      *
      * @param directory 文件夹名称
      * @see #fileList(File) 使用递归
@@ -317,7 +320,8 @@ public final class FileUtils {
             // eg: 1\n2\n3 + "-" => 1-2-3; not use prefix and suffix
             collected = lines.collect(Collectors.joining(delimiter));
         } catch (IOException e) {
-            throw new RuntimeException(e);
+            log.error(e.getMessage(), e);
+            return StringPool.EMPTY;
         }
         return collected;
     }
@@ -401,7 +405,7 @@ public final class FileUtils {
             try (BufferedInputStream bf = new BufferedInputStream(new FileInputStream(in))) {
                 byte[] data = new byte[bf.available()];
                 int read = bf.read(data);
-                log.info("read file [{}] size: {} bytes", in.getAbsolutePath(), read);
+                log.info("文件 {} 大小为 {}", in.getAbsolutePath(), Convert.byteCountToDisplaySize(read));
                 return data;
             }
         } catch (IOException e) {
@@ -431,7 +435,7 @@ public final class FileUtils {
         try (FileInputStream fis = new FileInputStream(in);
              FastByteArrayOutputStream outputStream = new FastByteArrayOutputStream()) {
             StreamUtils.copy(fis, outputStream);
-            return new String(outputStream.toByteArrayUnsafe(), StandardCharsets.UTF_8);
+            return outputStream.toString();
         } catch (IOException e) {
             log.error(e.getMessage(), e);
         }
@@ -460,8 +464,7 @@ public final class FileUtils {
         try (FileInputStream fis = new FileInputStream(in);
              FastByteArrayOutputStream outputStream = new FastByteArrayOutputStream()) {
             StreamUtils.copy(fis, outputStream);
-            byte[] fileContent = outputStream.toByteArray();
-            Files.write(out.toPath(), fileContent);
+            Files.write(out.toPath(), outputStream.toByteArray());
         } catch (IOException e) {
             log.error(e.getMessage(), e);
         }
@@ -470,33 +473,67 @@ public final class FileUtils {
     /**
      * 从URL读取内容
      *
-     * @param url             目标URL
-     * @param requestMethod   请求方式
-     * @param requestProperty 请求属性
+     * @param url            目标URL
+     * @param requestMethod  请求方式
+     * @param requestHeaders 请求头
+     * @param requestBody    请求体
      * @return URL返回的内容字符串, 读取失败返回空字符串
      */
-    public static String readUrl(String url, String requestMethod, Map<String, String> requestProperty) {
+    public static String readUrl(String url, String requestMethod,
+                                 Map<String, String> requestHeaders,
+                                 Map<String, String> requestBody) {
         HttpURLConnection connection = null;
         try {
-            log.info("请求的URL ===> {}", url);
+            log.info("请求的URL [{}] ===> {}", requestMethod, url);
             connection = (HttpURLConnection) new URL(url).openConnection();
             connection.setRequestMethod(requestMethod);
-            if (requestProperty != null) {
-                requestProperty.forEach(connection::addRequestProperty);
-                JSONObject requestHeaders = new JSONObject(connection.getRequestProperties());
-                log.info("请求头 ===> {}", requestHeaders.toString(4));
+            if (requestHeaders != null) {
+                // 向 HTTP 请求中添加请求头
+                requestHeaders.forEach(connection::addRequestProperty);
+                log.info("请求头 ===> {}", Convert.prettyJson(connection.getRequestProperties()));
             }
-            connection.setConnectTimeout(5000);
+            connection.setConnectTimeout(500);
             connection.setReadTimeout(10000);
             // 手动处理重定向
             connection.setInstanceFollowRedirects(false);
-            // 设置 HTTP 请求的传输模式为分块传输(适用于发送大量数据或流式数据, 可以避免将所有数据缓冲在内存中)
-            // connection.setChunkedStreamingMode(1024);
-            connection.setUseCaches(true);
+
+            connection.setUseCaches(false);
             // 设置 HTTP 请求允许从服务器读取数据
             connection.setDoInput(true);
-            // 设置 HTTP 请求允许发送数据到服务器
-            connection.setDoOutput(true);
+            if (requestBody != null) {
+                String body = new JSONObject(requestBody).toString();
+                log.info("请求体 ===> {}", Convert.prettyJson(body));
+                byte[] bodyBytes = body.getBytes(StandardCharsets.UTF_8);
+
+                boolean isGzip = NetworkUtils.isGzip(connection.getRequestProperties());
+                boolean isDeflate = NetworkUtils.isDeflate(connection.getRequestProperties());
+
+                if (!isGzip && !isDeflate) {
+                    // 受限制的请求头, sun.net.http.allowRestrictedHeaders
+                    connection.setRequestProperty("Content-Length", String.valueOf(bodyBytes.length));
+                    connection.setFixedLengthStreamingMode(bodyBytes.length);
+                } else {
+                    // 设置 HTTP 请求的传输模式为分块传输(适用于发送大量数据或流式数据, 可以避免将所有数据缓冲在内存中)
+                    connection.setChunkedStreamingMode(8196);
+                }
+
+                OutputStream os = null;
+
+                try {
+                    // 设置 HTTP 请求允许发送数据到服务器(用于发送请求体)
+                    connection.setDoOutput(true);
+                    os = connection.getOutputStream();
+                    if (isGzip) {
+                        os = new GZIPOutputStream(os);
+                    } else if (isDeflate) {
+                        os = new InflaterOutputStream(os);
+                    }
+                    os.write(bodyBytes);
+                    os.flush();
+                } finally {
+                    IOUtils.close(os);
+                }
+            }
             // 服务器返回给客户端的响应头信息
             Map<String, List<String>> headerFields = connection.getHeaderFields();
             JSONObject responseHeaders = new JSONObject();
@@ -510,9 +547,15 @@ public final class FileUtils {
                 while ((bytesRead = inputStream.read(buffer)) != -1) {
                     outputStream.write(buffer, 0, bytesRead);
                 }
-                return new String(outputStream.toByteArrayUnsafe(), StandardCharsets.UTF_8);
+                String response = outputStream.toString();
+                log.info("请求成功, 返回的响应信息为 ===> {}", Convert.prettyJson(response));
+                return response;
             } catch (IOException e) {
-                log.error(e.getMessage(), e);
+                log.error("请求发生异常 ===> {}", e.getCause() != null ? e.getCause().getMessage() : e.getMessage());
+                if (connection.getErrorStream() != null) {
+                    String errResponse = IOUtils.toString(connection.getErrorStream(), StandardCharsets.UTF_8);
+                    log.info("响应的异常信息为 ===> {}", Convert.prettyJson(errResponse));
+                }
             }
         } catch (Exception e) {
             log.error(e.getMessage(), e);
@@ -652,7 +695,7 @@ public final class FileUtils {
      * @throws BusinessException 如果文件不存在或写入流失败
      */
 
-    public void downLoadFileStream(String filePath, HttpServletRequest request, HttpServletResponse response) {
+    public void downloadFileStream(String filePath, HttpServletRequest request, HttpServletResponse response) {
         File file = new File(filePath);
         if (!file.exists() || !file.isFile()) {
             throw new BusinessException("文件不存在");
@@ -680,22 +723,10 @@ public final class FileUtils {
      * @return String
      */
     public static String fileToBase64(File file) {
-        InputStream in;
-        byte[] fileData = null;
-        int read = 0;
-        // 读取文件字节数组
-        try {
-            in = Files.newInputStream(file.toPath());
-            fileData = new byte[in.available()];
-            read = in.read(fileData);
-            in.close();
-        } catch (IOException e) {
-            log.error("read byte: {}, {}", read, e.getMessage());
-        }
         // 对字节数组Base64编码并且去掉换行符(由于JDK自带base64不会去掉换行符,导致base64格式验证失败)
         // 根据RFC822规定, BASE64Encoder编码每76个字符, 还需要加上一个回车换行
         // 部分Base64编码的java库还按照这个标准实行
-        return Base64.encodeBase64String(fileData);
+        return Base64.encodeBase64String(toByteArray(file));
     }
 
     /**
@@ -714,7 +745,7 @@ public final class FileUtils {
         Path dir;
         try {
             dir = Files.createDirectories(p);
-            log.info("创建目录[{}]成功", dir.toFile().getAbsolutePath());
+            log.info("创建目录 {} 成功", dir.toFile().getAbsolutePath());
         } catch (IOException e) {
             log.error("创建目录失败, {}", e.getMessage(), e);
         }

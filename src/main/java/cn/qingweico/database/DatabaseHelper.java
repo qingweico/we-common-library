@@ -2,11 +2,14 @@ package cn.qingweico.database;
 
 import cn.hutool.core.util.ReflectUtil;
 import cn.qingweico.concurrent.ObjectPool;
+import cn.qingweico.concurrent.pool.NamedThreadFactory;
 import cn.qingweico.constants.PathConstants;
 import cn.qingweico.model.enums.DatabaseTypeEnum;
 import cn.qingweico.model.enums.DbConProperty;
+import com.mysql.cj.jdbc.MysqlDataSource;
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
 import lombok.extern.slf4j.Slf4j;
-
 
 import java.io.FileInputStream;
 import java.io.IOException;
@@ -65,6 +68,24 @@ public final class DatabaseHelper {
             log.error("load {} error, {}", db, e.getMessage());
         }
         return properties;
+    }
+
+    public static MysqlDataSource getDatasource() {
+        MysqlDataSource dataSource = new MysqlDataSource();
+        dataSource.setURL(dbUlr);
+        dataSource.setUser(username);
+        dataSource.setPassword(password);
+        return dataSource;
+    }
+
+    public static HikariDataSource getHikari() throws SQLException {
+        HikariConfig config = new HikariConfig();
+        config.setDataSource(getDatasource());
+        config.setThreadFactory(new NamedThreadFactory("[Hikari]"));
+        HikariDataSource hikariDataSource = new HikariDataSource(config);
+        hikariDataSource.setLogWriter(new PrintWriter(System.out));
+        hikariDataSource.setLoginTimeout(3);
+        return hikariDataSource;
     }
 
     public static Connection getConnection() {

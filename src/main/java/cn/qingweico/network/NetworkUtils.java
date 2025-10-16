@@ -314,4 +314,32 @@ public class NetworkUtils {
     public static InputStream getInputStreamByUrl(String url) throws IOException {
         return getInputStreamByUrl(url, false);
     }
+
+    public static List<String> getHeaderList(Map<String, List<String>> headers,
+                                              String key) {
+        List<String> empty = new ArrayList<>(0);
+        if (headers == null) {
+            return empty;
+        }
+        for (String k : headers.keySet()) {
+            if (key.equalsIgnoreCase(k)) {
+                List<String> values = headers.get(k);
+                if (values != null) {
+                    return new ArrayList<>(values);
+                } else {
+                    return empty;
+                }
+            }
+        }
+        return empty;
+    }
+
+
+    public static boolean isGzip(Map<String, List<String>> headers) {
+        return getHeaderList(headers, Header.CONTENT_ENCODING.getValue()).stream().anyMatch("gzip"::equalsIgnoreCase);
+    }
+
+    public static boolean isDeflate(Map<String, List<String>> headers) {
+        return getHeaderList(headers, Header.CONTENT_ENCODING.getValue()).stream().anyMatch("deflate"::equalsIgnoreCase);
+    }
 }
