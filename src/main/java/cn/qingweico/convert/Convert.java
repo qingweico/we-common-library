@@ -346,8 +346,11 @@ public class Convert {
         }
         try {
             if (source instanceof String str) {
-                if (JSONUtil.isTypeJSON(str)) {
-                    return new JSONObject(str).toString(4);
+                if (JSONUtil.isTypeJSONObject(str)) {
+                    return new org.json.JSONObject(str).toString(4);
+                }
+                if (JSONUtil.isTypeJSONArray(str)) {
+                    return new org.json.JSONArray(str).toString(4);
                 }
                 return str;
             }

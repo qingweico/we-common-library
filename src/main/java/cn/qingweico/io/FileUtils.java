@@ -39,10 +39,7 @@ import javax.servlet.ServletOutputStream;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.*;
-import java.net.HttpURLConnection;
-import java.net.URISyntaxException;
-import java.net.URL;
-import java.net.URLEncoder;
+import java.net.*;
 import java.nio.ByteBuffer;
 import java.nio.channels.AsynchronousFileChannel;
 import java.nio.channels.FileChannel;
@@ -473,27 +470,36 @@ public final class FileUtils {
     /**
      * 从URL读取内容
      *
-     * @param url            目标URL
-     * @param requestMethod  请求方式
-     * @param requestHeaders 请求头
-     * @param requestBody    请求体
+     * @param hre HTTP请求实体类
      * @return URL返回的内容字符串, 读取失败返回空字符串
      */
-    public static String readUrl(String url, String requestMethod,
-                                 Map<String, String> requestHeaders,
-                                 Map<String, String> requestBody) {
+    public static String readUrl(HttpRequestEntity hre) {
         HttpURLConnection connection = null;
         try {
-            log.info("请求的URL [{}] ===> {}", requestMethod, url);
-            connection = (HttpURLConnection) new URL(url).openConnection();
+            String requestUrl = hre.getRequestUrl();
+            String requestMethod = hre.getRequestMethod().name();
+            Map<String, String> requestHeaders = hre.getRequestHeaders();
+            Map<String, String> requestBody = hre.getRequestBody();
+            int connectTimeout = hre.getConnectTimeout();
+            int readTimeout = hre.getReadTimeout();
+            log.info("请求的URL ====> {}, 请求方式 -> [{}], 请求时间戳 -> {}",
+                    requestUrl, requestMethod, hre.getEpoch());
+            URL url = new URL(requestUrl);
+            if (StringUtils.isNotEmpty(hre.getProxyHost())) {
+                Proxy proxy = new Proxy(Proxy.Type.HTTP, new InetSocketAddress(hre.getProxyHost(), hre.getProxyPort()));
+                connection = (HttpURLConnection) url.openConnection(proxy);
+                log.info("已启用代理服务器 ====> {}", proxy.address());
+            } else {
+                connection = (HttpURLConnection) url.openConnection();
+            }
             connection.setRequestMethod(requestMethod);
             if (requestHeaders != null) {
                 // 向 HTTP 请求中添加请求头
                 requestHeaders.forEach(connection::addRequestProperty);
                 log.info("请求头 ===> {}", Convert.prettyJson(connection.getRequestProperties()));
             }
-            connection.setConnectTimeout(500);
-            connection.setReadTimeout(10000);
+            connection.setConnectTimeout(connectTimeout);
+            connection.setReadTimeout(readTimeout);
             // 手动处理重定向
             connection.setInstanceFollowRedirects(false);
 

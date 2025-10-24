@@ -4,6 +4,7 @@ import cn.hutool.http.ContentType;
 import cn.hutool.http.Header;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
+import cn.qingweico.model.HttpRequestEntity;
 import cn.qingweico.model.Poem;
 import cn.qingweico.model.RequestConfigOptions;
 import cn.qingweico.network.http.HttpInvocationHandler;
@@ -11,6 +12,7 @@ import com.google.common.io.Closeables;
 import com.google.gson.JsonParser;
 import com.google.gson.JsonSyntaxException;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang3.StringUtils;
 import org.apache.http.*;
 import org.apache.http.client.HttpClient;
 import org.apache.http.client.config.RequestConfig;
@@ -179,10 +181,11 @@ public class NetworkUtils {
             log.error("{}", e.getCause().getMessage());
         }
     }
+
     private static void setHttpPost(HttpPost httpPost, Map<String, String> formKeyValue) {
         List<NameValuePair> parameters = new ArrayList<>();
         httpPost.addHeader(Header.CONTENT_TYPE.getValue(), ContentType.FORM_URLENCODED.getValue());
-        if(formKeyValue != null && !formKeyValue.isEmpty()) {
+        if (formKeyValue != null && !formKeyValue.isEmpty()) {
             formKeyValue.forEach((key, value) -> {
                 BasicNameValuePair basicNameValuePair = new BasicNameValuePair(key, value);
                 parameters.add(basicNameValuePair);
@@ -279,15 +282,19 @@ public class NetworkUtils {
         return EntityUtils.toString(httpEntity, StandardCharsets.UTF_8);
     }
 
-    public static InputStream getInputStreamByUrl(String url, boolean downloadFully) throws IOException {
+    public static InputStream getInputStreamByUrl(HttpRequestEntity hre, boolean downloadFully) throws IOException {
         CloseableHttpClient client = null;
         CloseableHttpResponse response = null;
+        String url = hre.getRequestUrl();
         try {
             // URL中文件名称带有空格(LaxRedirectStrategy不起作用或者禁用重定向手动处理空格)
-            client = HttpClients.custom()
-                    .setRedirectStrategy(new LaxRedirectStrategy())
-                    //.disableRedirectHandling()
-                    .build();
+            HttpClientBuilder builder = HttpClients.custom()
+                    .setRedirectStrategy(new LaxRedirectStrategy());
+            //.disableRedirectHandling()
+            if (StringUtils.isNotEmpty(hre.getProxyHost())) {
+                builder.setProxy(new HttpHost(hre.getProxyHost(), hre.getProxyPort()));
+            }
+            client = builder.build();
             HttpGet request = new HttpGet(url);
             request.setHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
             response = client.execute(request);
@@ -311,12 +318,12 @@ public class NetworkUtils {
         // Do not close response or client stream, and closed by the caller
     }
 
-    public static InputStream getInputStreamByUrl(String url) throws IOException {
-        return getInputStreamByUrl(url, false);
+    public static InputStream getInputStreamByUrl(HttpRequestEntity hre) throws IOException {
+        return getInputStreamByUrl(hre, false);
     }
 
     public static List<String> getHeaderList(Map<String, List<String>> headers,
-                                              String key) {
+                                             String key) {
         List<String> empty = new ArrayList<>(0);
         if (headers == null) {
             return empty;
