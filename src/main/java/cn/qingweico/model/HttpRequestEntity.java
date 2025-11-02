@@ -5,6 +5,8 @@ import lombok.Data;
 import lombok.NonNull;
 import org.springframework.web.bind.annotation.RequestMethod;
 
+import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.util.Map;
 
 /**
@@ -34,6 +36,9 @@ public class HttpRequestEntity {
     /*读取超时时间(ms)*/
     @Builder.Default
     private int readTimeout = 5000;
+    /*字符集*/
+    @Builder.Default
+    private Charset charset = StandardCharsets.UTF_8;
     @Builder.Default
     /*请求时间戳*/
     private long epoch = System.currentTimeMillis();
