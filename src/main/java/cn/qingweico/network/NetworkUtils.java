@@ -47,6 +47,7 @@ import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 /**
  * @author zqw
@@ -375,7 +376,9 @@ public class NetworkUtils {
             HttpPost httpPost = new HttpPost(requestUrl);
             if (requestBody != null) {
                 // 添加请求体
-                String contentType = requestHeaders.getOrDefault(Header.CONTENT_TYPE.getValue(), MimeTypeUtils.APPLICATION_JSON_VALUE);
+                String contentType = requestHeaders == null ? MimeTypeUtils.APPLICATION_JSON_VALUE
+                        : requestHeaders.containsKey(Header.CONTENT_TYPE.getValue())
+                        ? requestHeaders.remove(Header.CONTENT_TYPE.getValue()) : MimeTypeUtils.APPLICATION_JSON_VALUE;
                 HttpEntity httpEntity;
                 if (ContentType.FORM_URLENCODED.getValue().equals(contentType)) {
                     List<BasicNameValuePair> parameters = new ArrayList<>(requestBody.size());
@@ -387,7 +390,8 @@ public class NetworkUtils {
                     MultipartEntityBuilder multipartEntityBuilder = MultipartEntityBuilder.create();
                     multipartEntityBuilder.setMode(HttpMultipartMode.BROWSER_COMPATIBLE);
                     multipartEntityBuilder.setCharset(hre.getCharset());
-                    requestBody.forEach((k, v) -> multipartEntityBuilder.addPart(k, new StringBody(v, org.apache.http.entity.ContentType.TEXT_PLAIN)));
+                    requestBody.forEach((k, v) ->
+                            multipartEntityBuilder.addPart(k, new StringBody(v, org.apache.http.entity.ContentType.TEXT_PLAIN)));
                     // Add FileBody
                     httpEntity = multipartEntityBuilder.build();
                 } else {
@@ -398,6 +402,7 @@ public class NetworkUtils {
                 }
                 log.info("请求体 ===> {}", formEntityToString(httpEntity));
                 httpPost.setEntity(httpEntity);
+                httpPost.setHeader(httpEntity.getContentType());
             }
             request = httpPost;
         } else {
@@ -405,10 +410,15 @@ public class NetworkUtils {
         }
         // 添加请求头
         if (requestHeaders != null) {
-            log.info("请求头 ===> {}", Convert.prettyJson(requestHeaders));
             requestHeaders.forEach(request::addHeader);
+            requestHeaders = Arrays.stream(request.getAllHeaders())
+                    .collect(Collectors.toMap(org.apache.http.Header::getName,
+                            org.apache.http.Header::getValue));
+            log.info("请求头 ===> {}", Convert.prettyJson(requestHeaders));
         }
-        RequestConfig.Builder builder = RequestConfig.custom().setConnectTimeout(hre.getConnectTimeout()).setSocketTimeout(hre.getReadTimeout());
+        RequestConfig.Builder builder = RequestConfig.custom()
+                .setConnectTimeout(hre.getConnectTimeout())
+                .setSocketTimeout(hre.getReadTimeout());
         if (StringUtils.isNotEmpty(hre.getProxyHost())) {
             builder.setProxy(new HttpHost(hre.getProxyHost(), hre.getProxyPort()));
             enableProxy = true;
@@ -442,7 +452,9 @@ public class NetworkUtils {
             builder.get();
         } else if (requestMethod.equals(RequestMethod.POST.name())) {
             if (requestBody != null) {
-                String contentType = requestHeaders.getOrDefault(Header.CONTENT_TYPE.getValue(), MimeTypeUtils.APPLICATION_JSON_VALUE);
+                String contentType = requestHeaders == null ? MimeTypeUtils.APPLICATION_JSON_VALUE
+                        : requestHeaders.containsKey(Header.CONTENT_TYPE.getValue())
+                        ? requestHeaders.remove(Header.CONTENT_TYPE.getValue()) : MimeTypeUtils.APPLICATION_JSON_VALUE;
                 MediaType mediaType = MediaType.parse(contentType);
                 RequestBody body;
                 if (ContentType.FORM_URLENCODED.getValue().equals(contentType)) {
@@ -458,16 +470,24 @@ public class NetworkUtils {
                 }
                 builder.post(body);
                 log.info("请求体为 ====> {}", formBodyToString(body));
+                mediaType = body.contentType();
+                if (mediaType != null) {
+                    builder.addHeader(Header.CONTENT_TYPE.getValue(), mediaType.toString());
+                }
             }
         } else {
             throw new IllegalArgumentException("不支持的请求方法: " + requestMethod);
         }
         if (requestHeaders != null) {
-            infoLog("请求头 ===> {}", Convert.prettyJson(requestHeaders));
             requestHeaders.forEach(builder::addHeader);
         }
         request = builder.build();
-        OkHttpClient.Builder clientBuilder = new OkHttpClient().newBuilder().readTimeout(hre.getReadTimeout(), TimeUnit.MILLISECONDS).connectTimeout(hre.getConnectTimeout(), TimeUnit.MILLISECONDS);
+        Headers headers = request.headers();
+        infoLog("请求头 ===> {}", Convert.prettyJson(headers.toMultimap()));
+        OkHttpClient.Builder clientBuilder = new OkHttpClient()
+                .newBuilder()
+                .readTimeout(hre.getReadTimeout(), TimeUnit.MILLISECONDS)
+                .connectTimeout(hre.getConnectTimeout(), TimeUnit.MILLISECONDS);
 
         if (StringUtils.isNotEmpty(hre.getProxyHost())) {
             clientBuilder.proxy(new java.net.Proxy(java.net.Proxy.Type.HTTP, new InetSocketAddress(hre.getProxyHost(), hre.getProxyPort())));
