@@ -10,7 +10,9 @@ import com.mysql.cj.jdbc.MysqlDataSource;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.jdbc.datasource.TransactionAwareDataSourceProxy;
 
+import javax.sql.DataSource;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.PrintStream;
@@ -33,7 +35,8 @@ import java.util.Properties;
 @Slf4j
 public final class DatabaseHelper {
 
-    private DatabaseHelper() {}
+    private DatabaseHelper() {
+    }
     /*these field values can be revised before using*/
 
     static String driveClassName;
@@ -86,6 +89,10 @@ public final class DatabaseHelper {
         hikariDataSource.setLogWriter(new PrintWriter(System.out));
         hikariDataSource.setLoginTimeout(3);
         return hikariDataSource;
+    }
+
+    public static DataSource wrappedDataSource() {
+        return new TransactionAwareDataSourceProxy(getDatasource());
     }
 
     public static Connection getConnection() {

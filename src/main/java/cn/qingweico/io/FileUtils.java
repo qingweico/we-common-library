@@ -30,7 +30,6 @@ import org.apache.commons.lang3.time.StopWatch;
 import org.apache.poi.poifs.filesystem.FileMagic;
 import org.apache.tika.Tika;
 import org.jetbrains.annotations.NotNull;
-import org.json.JSONObject;
 import org.springframework.util.FastByteArrayOutputStream;
 import org.springframework.util.FileCopyUtils;
 import org.springframework.util.StreamUtils;
@@ -39,7 +38,9 @@ import javax.servlet.ServletOutputStream;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.*;
-import java.net.*;
+import java.net.URISyntaxException;
+import java.net.URL;
+import java.net.URLEncoder;
 import java.nio.ByteBuffer;
 import java.nio.channels.AsynchronousFileChannel;
 import java.nio.channels.FileChannel;
@@ -57,8 +58,6 @@ import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import java.util.zip.GZIPInputStream;
-import java.util.zip.GZIPOutputStream;
-import java.util.zip.InflaterOutputStream;
 import java.util.zip.ZipInputStream;
 
 import static com.google.common.base.Preconditions.checkNotNull;
@@ -465,112 +464,6 @@ public final class FileUtils {
         } catch (IOException e) {
             log.error(e.getMessage(), e);
         }
-    }
-
-    /**
-     * 从URL读取内容
-     *
-     * @param hre HTTP请求实体类
-     * @return URL返回的内容字符串, 读取失败返回空字符串
-     */
-    public static String readUrl(HttpRequestEntity hre) {
-        HttpURLConnection connection = null;
-        try {
-            String requestUrl = hre.getRequestUrl();
-            String requestMethod = hre.getRequestMethod().name();
-            Map<String, String> requestHeaders = hre.getRequestHeaders();
-            Map<String, String> requestBody = hre.getRequestBody();
-            int connectTimeout = hre.getConnectTimeout();
-            int readTimeout = hre.getReadTimeout();
-            log.info("请求的URL ====> {}, 请求方式 -> [{}], 请求时间戳 -> {}",
-                    requestUrl, requestMethod, hre.getEpoch());
-            URL url = new URL(requestUrl);
-            if (StringUtils.isNotEmpty(hre.getProxyHost())) {
-                Proxy proxy = new Proxy(Proxy.Type.HTTP, new InetSocketAddress(hre.getProxyHost(), hre.getProxyPort()));
-                connection = (HttpURLConnection) url.openConnection(proxy);
-                log.info("已启用代理服务器 ====> {}", proxy.address());
-            } else {
-                connection = (HttpURLConnection) url.openConnection();
-            }
-            connection.setRequestMethod(requestMethod);
-            if (requestHeaders != null) {
-                // 向 HTTP 请求中添加请求头
-                requestHeaders.forEach(connection::addRequestProperty);
-                log.info("请求头 ===> {}", Convert.prettyJson(connection.getRequestProperties()));
-            }
-            connection.setConnectTimeout(connectTimeout);
-            connection.setReadTimeout(readTimeout);
-            // 手动处理重定向
-            connection.setInstanceFollowRedirects(false);
-
-            connection.setUseCaches(false);
-            // 设置 HTTP 请求允许从服务器读取数据
-            connection.setDoInput(true);
-            if (requestBody != null) {
-                String body = new JSONObject(requestBody).toString();
-                log.info("请求体 ===> {}", Convert.prettyJson(body));
-                byte[] bodyBytes = body.getBytes(StandardCharsets.UTF_8);
-
-                boolean isGzip = NetworkUtils.isGzip(connection.getRequestProperties());
-                boolean isDeflate = NetworkUtils.isDeflate(connection.getRequestProperties());
-
-                if (!isGzip && !isDeflate) {
-                    // 受限制的请求头, sun.net.http.allowRestrictedHeaders
-                    connection.setRequestProperty("Content-Length", String.valueOf(bodyBytes.length));
-                    connection.setFixedLengthStreamingMode(bodyBytes.length);
-                } else {
-                    // 设置 HTTP 请求的传输模式为分块传输(适用于发送大量数据或流式数据, 可以避免将所有数据缓冲在内存中)
-                    connection.setChunkedStreamingMode(8196);
-                }
-
-                OutputStream os = null;
-
-                try {
-                    // 设置 HTTP 请求允许发送数据到服务器(用于发送请求体)
-                    connection.setDoOutput(true);
-                    os = connection.getOutputStream();
-                    if (isGzip) {
-                        os = new GZIPOutputStream(os);
-                    } else if (isDeflate) {
-                        os = new InflaterOutputStream(os);
-                    }
-                    os.write(bodyBytes);
-                    os.flush();
-                } finally {
-                    IOUtils.close(os);
-                }
-            }
-            // 服务器返回给客户端的响应头信息
-            Map<String, List<String>> headerFields = connection.getHeaderFields();
-            JSONObject responseHeaders = new JSONObject();
-            // 响应头的第一行是状态行, 不是一个标准的 HTTP 头, 使用 null 作为key标识
-            headerFields.forEach((key, value) -> responseHeaders.put(Objects.requireNonNullElse(key, "Status"), value));
-            log.info("响应头 ===> {}", responseHeaders.toString(4));
-            try (InputStream inputStream = connection.getInputStream();
-                 FastByteArrayOutputStream outputStream = new FastByteArrayOutputStream()) {
-                byte[] buffer = new byte[4096];
-                int bytesRead;
-                while ((bytesRead = inputStream.read(buffer)) != -1) {
-                    outputStream.write(buffer, 0, bytesRead);
-                }
-                String response = outputStream.toString();
-                log.info("请求成功, 返回的响应信息为 ===> {}", Convert.prettyJson(response));
-                return response;
-            } catch (IOException e) {
-                log.error("请求发生异常 ===> {}", e.getCause() != null ? e.getCause().getMessage() : e.getMessage());
-                if (connection.getErrorStream() != null) {
-                    String errResponse = IOUtils.toString(connection.getErrorStream(), StandardCharsets.UTF_8);
-                    log.info("响应的异常信息为 ===> {}", Convert.prettyJson(errResponse));
-                }
-            }
-        } catch (Exception e) {
-            log.error(e.getMessage(), e);
-        } finally {
-            if (connection != null) {
-                connection.disconnect();
-            }
-        }
-        return StringUtils.EMPTY;
     }
 
     /**

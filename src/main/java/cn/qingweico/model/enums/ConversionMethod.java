@@ -5,5 +5,5 @@ package cn.qingweico.model.enums;
  * @date 2025/9/12
  */
 public enum ConversionMethod {
-    COMMONS, JODA, JDK
+    COMMONS, JODA, JDK, APACHE, OKHTTP
 }

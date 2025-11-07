@@ -2,12 +2,14 @@ package cn.qingweico.network;
 
 import cn.hutool.http.ContentType;
 import cn.hutool.http.Header;
+import cn.hutool.http.HttpUtil;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
 import cn.qingweico.convert.Convert;
 import cn.qingweico.model.HttpRequestEntity;
 import cn.qingweico.model.Poem;
 import cn.qingweico.model.RequestConfigOptions;
+import cn.qingweico.model.enums.ConversionMethod;
 import cn.qingweico.network.http.HttpInvocationHandler;
 import com.google.common.io.Closeables;
 import com.google.gson.Gson;
@@ -16,6 +18,7 @@ import com.google.gson.JsonSyntaxException;
 import lombok.extern.slf4j.Slf4j;
 import okhttp3.*;
 import okio.Buffer;
+import org.apache.commons.io.IOUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.http.*;
 import org.apache.http.client.HttpClient;
@@ -37,6 +40,7 @@ import org.apache.http.impl.client.LaxRedirectStrategy;
 import org.apache.http.message.BasicNameValuePair;
 import org.apache.http.util.EntityUtils;
 import org.springframework.util.Assert;
+import org.springframework.util.FastByteArrayOutputStream;
 import org.springframework.util.MimeTypeUtils;
 import org.springframework.web.bind.annotation.RequestMethod;
 
@@ -48,6 +52,8 @@ import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
+import java.util.zip.GZIPOutputStream;
+import java.util.zip.InflaterOutputStream;
 
 /**
  * @author zqw
@@ -362,7 +368,10 @@ public class NetworkUtils {
         return getHeaderList(headers, Header.CONTENT_ENCODING.getValue()).stream().anyMatch("deflate"::equalsIgnoreCase);
     }
 
-    public static String apacheClientRequest(HttpRequestEntity hre) {
+    /**
+     * 使用 Apache {@link HttpClient} 发起 HTTP 请求
+     */
+    private static String apacheClientRequest(HttpRequestEntity hre) {
         String requestUrl = hre.getRequestUrl();
         String requestMethod = hre.getRequestMethod().name();
         Map<String, String> requestBody = hre.getRequestBody();
@@ -400,7 +409,7 @@ public class NetworkUtils {
                     stringEntity.setContentType(contentType);
                     httpEntity = stringEntity;
                 }
-                log.info("请求体 ===> {}", formEntityToString(httpEntity));
+                infoBodyLog(formEntityToString(httpEntity));
                 httpPost.setEntity(httpEntity);
                 httpPost.setHeader(httpEntity.getContentType());
             }
@@ -414,7 +423,7 @@ public class NetworkUtils {
             requestHeaders = Arrays.stream(request.getAllHeaders())
                     .collect(Collectors.toMap(org.apache.http.Header::getName,
                             org.apache.http.Header::getValue));
-            log.info("请求头 ===> {}", Convert.prettyJson(requestHeaders));
+            infoHeadersLog(Convert.prettyJson(requestHeaders));
         }
         RequestConfig.Builder builder = RequestConfig.custom()
                 .setConnectTimeout(hre.getConnectTimeout())
@@ -439,8 +448,10 @@ public class NetworkUtils {
         }
         return StringUtils.EMPTY;
     }
-
-    public static String okhttpRequest(HttpRequestEntity hre) {
+    /**
+     * 使用 OKHttp {@link OkHttpClient} 发起 HTTP 请求
+     */
+    private static String okhttpRequest(HttpRequestEntity hre) {
         Request request;
         String requestUrl = hre.getRequestUrl();
         String requestMethod = hre.getRequestMethod().name();
@@ -469,7 +480,7 @@ public class NetworkUtils {
                     body = RequestBody.create(new JSONObject(requestBody).toString(), mediaType);
                 }
                 builder.post(body);
-                log.info("请求体为 ====> {}", formBodyToString(body));
+                infoBodyLog(formBodyToString(body));
                 mediaType = body.contentType();
                 if (mediaType != null) {
                     builder.addHeader(Header.CONTENT_TYPE.getValue(), mediaType.toString());
@@ -483,7 +494,7 @@ public class NetworkUtils {
         }
         request = builder.build();
         Headers headers = request.headers();
-        infoLog("请求头 ===> {}", Convert.prettyJson(headers.toMultimap()));
+        infoHeadersLog(Convert.prettyJson(headers.toMultimap()));
         OkHttpClient.Builder clientBuilder = new OkHttpClient()
                 .newBuilder()
                 .readTimeout(hre.getReadTimeout(), TimeUnit.MILLISECONDS)
@@ -512,6 +523,157 @@ public class NetworkUtils {
         return StringUtils.EMPTY;
     }
 
+    /**
+     * 使用 JDK 原生 {@link HttpURLConnection} 发起 HTTP 请求
+     */
+    private static String httpUrlConnectionRequest(HttpRequestEntity hre) {
+        HttpURLConnection connection = null;
+        try {
+            String requestUrl = hre.getRequestUrl();
+            String requestMethod = hre.getRequestMethod().name();
+            Map<String, String> requestHeaders = hre.getRequestHeaders();
+            Map<String, String> requestBody = hre.getRequestBody();
+            int connectTimeout = hre.getConnectTimeout();
+            int readTimeout = hre.getReadTimeout();
+            log.info("请求的URL ====> {}, 请求方式 -> [{}], 请求时间戳 -> {}",
+                    requestUrl, requestMethod, hre.getEpoch());
+            URL url = new URL(requestUrl);
+            System.setProperty("sun.net.http.allowRestrictedHeaders", "true");
+            if (StringUtils.isNotEmpty(hre.getProxyHost())) {
+                java.net.Proxy proxy = new java.net.Proxy(java.net.Proxy.Type.HTTP, new InetSocketAddress(hre.getProxyHost(), hre.getProxyPort()));
+                connection = (HttpURLConnection) url.openConnection(proxy);
+                log.info("已启用代理服务器 ====> {}", proxy.address());
+            } else {
+                connection = (HttpURLConnection) url.openConnection();
+            }
+            connection.setRequestMethod(requestMethod);
+            if (requestHeaders != null) {
+                // 向 HTTP 请求中添加请求头
+                requestHeaders.forEach(connection::addRequestProperty);
+            }
+            connection.setConnectTimeout(connectTimeout);
+            connection.setReadTimeout(readTimeout);
+            // 手动处理重定向
+            connection.setInstanceFollowRedirects(false);
+
+            connection.setUseCaches(false);
+            // 设置 HTTP 请求允许从服务器读取数据
+            connection.setDoInput(true);
+            if (requestBody != null) {
+                String contentType = requestHeaders == null ? MimeTypeUtils.APPLICATION_JSON_VALUE
+                        : requestHeaders.containsKey(Header.CONTENT_TYPE.getValue())
+                        ? requestHeaders.remove(Header.CONTENT_TYPE.getValue()) : MimeTypeUtils.APPLICATION_JSON_VALUE;
+                String body;
+                if (ContentType.FORM_URLENCODED.getValue().equals(contentType)) {
+                    body = HttpUtil.toParams(requestBody);
+                } else if (ContentType.MULTIPART.getValue().equals(contentType)) {
+                    MultipartEntityBuilder multipartEntityBuilder = MultipartEntityBuilder.create();
+                    multipartEntityBuilder.setMode(HttpMultipartMode.BROWSER_COMPATIBLE);
+                    multipartEntityBuilder.setCharset(hre.getCharset());
+                    requestBody.forEach(multipartEntityBuilder::addTextBody);
+                    HttpEntity httpEntity = multipartEntityBuilder.build();
+                    org.apache.http.Header header = httpEntity.getContentType();
+                    // 更新下请求头Content-Type
+                    connection.setRequestProperty(header.getName(), header.getValue());
+                    body = formEntityToString(httpEntity);
+                } else {
+                    body = new org.json.JSONObject(requestBody).toString();
+                }
+                infoBodyLog(Convert.prettyJson(body));
+                byte[] bodyBytes = body.getBytes(StandardCharsets.UTF_8);
+
+                boolean isGzip = isGzip(connection.getRequestProperties());
+                boolean isDeflate = isDeflate(connection.getRequestProperties());
+
+                if (!isGzip && !isDeflate) {
+                    // 受限制的请求头, sun.net.http.allowRestrictedHeaders
+                    connection.setRequestProperty(Header.CONTENT_LENGTH.getValue(), String.valueOf(bodyBytes.length));
+                    connection.setFixedLengthStreamingMode(bodyBytes.length);
+                } else {
+                    // 设置 HTTP 请求的传输模式为分块传输(适用于发送大量数据或流式数据, 可以避免将所有数据缓冲在内存中)
+                    connection.setChunkedStreamingMode(8196);
+                }
+                infoHeadersLog(Convert.prettyJson(connection.getRequestProperties()));
+                OutputStream os = null;
+
+                try {
+                    // 设置 HTTP 请求允许发送数据到服务器(用于发送请求体)
+                    connection.setDoOutput(true);
+                    os = connection.getOutputStream();
+                    if (isGzip) {
+                        os = new GZIPOutputStream(os);
+                    } else if (isDeflate) {
+                        os = new InflaterOutputStream(os);
+                    }
+                    os.write(bodyBytes);
+                    os.flush();
+                } finally {
+                    IOUtils.close(os);
+                }
+            } else {
+                // 设置请求体前 getOutputStream 会设置 connecting 为 true, 避免 Already connected
+                NetworkUtils.infoHeadersLog(Convert.prettyJson(connection.getRequestProperties()));
+            }
+            // 服务器返回给客户端的响应头信息
+            Map<String, List<String>> headerFields = connection.getHeaderFields();
+            org.json.JSONObject responseHeaders = new org.json.JSONObject();
+            // 响应头的第一行是状态行, 不是一个标准的 HTTP 头, 使用 null 作为key标识
+            headerFields.forEach((key, value) -> responseHeaders.put(Objects.requireNonNullElse(key, "Status"), value));
+            log.info("响应头 ===> {}", responseHeaders.toString(4));
+            try (InputStream inputStream = connection.getInputStream();
+                 FastByteArrayOutputStream outputStream = new FastByteArrayOutputStream()) {
+                byte[] buffer = new byte[4096];
+                int bytesRead;
+                while ((bytesRead = inputStream.read(buffer)) != -1) {
+                    outputStream.write(buffer, 0, bytesRead);
+                }
+                String response = outputStream.toString();
+                log.info("请求成功, 返回的响应信息为 ===> {}", Convert.prettyJson(response));
+                return response;
+            } catch (IOException e) {
+                log.error("请求发生异常 ===> {}", e.getCause() != null ? e.getCause().getMessage() : e.getMessage());
+                if (connection.getErrorStream() != null) {
+                    String errResponse = IOUtils.toString(connection.getErrorStream(), StandardCharsets.UTF_8);
+                    log.info("响应的异常信息为 ===> {}", Convert.prettyJson(errResponse));
+                }
+            }
+        } catch (Exception e) {
+            log.error(e.getMessage(), e);
+        } finally {
+            if (connection != null) {
+                connection.disconnect();
+            }
+        }
+        return StringUtils.EMPTY;
+    }
+
+    /**
+     * @param hre HTTP请求实体类
+     * @param client 底层发起 HTTP 请求的 Client
+     * @return  HTTP请求返回的内容字符串, 读取失败返回空字符串
+     */
+    public static String httpRequest(HttpRequestEntity hre, ConversionMethod client) {
+        switch (client) {
+            case JDK -> {
+                return httpUrlConnectionRequest(hre);
+            }
+            case APACHE -> {
+                return apacheClientRequest(hre);
+            }
+            case OKHTTP -> {
+                return okhttpRequest(hre);
+            }
+            default -> throw new IllegalArgumentException("Unsupported HTTP Client: " + client);
+        }
+    }
+
+    /**
+     * @see #httpRequest(HttpRequestEntity, ConversionMethod)
+     */
+    public static String httpRequest(HttpRequestEntity hre) {
+        return httpRequest(hre, ConversionMethod.JDK);
+    }
+
 
     public static String formEntityToString(HttpEntity entity) {
         try {
@@ -538,5 +700,13 @@ public class NetworkUtils {
 
     public static void infoLog(String msg, Object... args) {
         log.info(msg, args);
+    }
+
+    public static void infoHeadersLog(String headers) {
+        infoLog("请求头 ===> {}", headers);
+    }
+
+    public static void infoBodyLog(String body) {
+        infoLog("请求体 ===> {}", body);
     }
 }
