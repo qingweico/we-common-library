@@ -28,7 +28,11 @@ public enum DbConProperty {
     /**
      * password
      */
-    PASSWORD("password");
+    PASSWORD("password"),
+    /**
+     * database
+     */
+    DATABASE("database");
 
     private final String property;
 }

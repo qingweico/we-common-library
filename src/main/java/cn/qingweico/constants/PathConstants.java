@@ -29,4 +29,9 @@ public interface PathConstants {
      * Redis配置文件路径
      */
     String REDIS_CONFIG_FILE_PATH = "redis.properties";
+
+    /**
+     * SqlServer数据库配置文件路径
+     */
+    String SQLSERVER_CONFIG_FILE_PATH = "sqlserver.properties";
 }
