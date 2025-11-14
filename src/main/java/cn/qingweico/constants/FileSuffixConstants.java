@@ -39,5 +39,9 @@ public interface FileSuffixConstants {
      * Word File suffix: ".docx"
      */
     String WORD = Symbol.DOT + "docx";
+    /**
+     * Excel File suffix: ".xlsx"
+     */
+    String EXCEL = Symbol.DOT + "xlsx";
 
 }

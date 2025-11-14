@@ -5,6 +5,7 @@ import cn.hutool.http.Header;
 import cn.hutool.http.HttpUtil;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
+import cn.qingweico.constants.Symbol;
 import cn.qingweico.convert.Convert;
 import cn.qingweico.model.HttpRequestEntity;
 import cn.qingweico.model.Poem;
@@ -15,6 +16,11 @@ import com.google.common.io.Closeables;
 import com.google.gson.Gson;
 import com.google.gson.JsonParser;
 import com.google.gson.JsonSyntaxException;
+import jodd.util.StringPool;
+import kong.unirest.core.Config;
+import kong.unirest.core.HttpRequestWithBody;
+import kong.unirest.core.Unirest;
+import kong.unirest.core.UnirestException;
 import lombok.extern.slf4j.Slf4j;
 import okhttp3.*;
 import okio.Buffer;
@@ -37,20 +43,25 @@ import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClientBuilder;
 import org.apache.http.impl.client.HttpClients;
 import org.apache.http.impl.client.LaxRedirectStrategy;
+import org.apache.http.impl.conn.PoolingHttpClientConnectionManager;
 import org.apache.http.message.BasicNameValuePair;
 import org.apache.http.util.EntityUtils;
-import org.springframework.util.Assert;
-import org.springframework.util.FastByteArrayOutputStream;
-import org.springframework.util.MimeTypeUtils;
-import org.springframework.web.bind.annotation.RequestMethod;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.ResponseEntity;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
+import org.springframework.util.*;
+import org.springframework.web.client.RestTemplate;
 
 import java.io.*;
 import java.lang.reflect.Proxy;
 import java.net.*;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import java.util.zip.GZIPOutputStream;
 import java.util.zip.InflaterOutputStream;
@@ -373,15 +384,15 @@ public class NetworkUtils {
      */
     private static String apacheClientRequest(HttpRequestEntity hre) {
         String requestUrl = hre.getRequestUrl();
-        String requestMethod = hre.getRequestMethod().name();
+        String httpMethod = hre.getHttpMethod().name();
         Map<String, String> requestBody = hre.getRequestBody();
         Map<String, String> requestHeaders = hre.getRequestHeaders();
         HttpRequestBase request;
         boolean enableProxy = false;
-        infoLog("请求的URL ====> {}, 请求方式 -> [{}], 请求时间戳 -> {}", requestUrl, requestMethod, hre.getEpoch());
-        if (HttpGet.METHOD_NAME.equals(requestMethod)) {
+        infoLog("请求的URL ====> {}, 请求方式 -> [{}], 请求时间戳 -> {}", requestUrl, httpMethod, hre.getEpoch());
+        if (HttpGet.METHOD_NAME.equals(httpMethod)) {
             request = new HttpGet(requestUrl);
-        } else if (HttpPost.METHOD_NAME.equals(requestMethod)) {
+        } else if (HttpPost.METHOD_NAME.equals(httpMethod)) {
             HttpPost httpPost = new HttpPost(requestUrl);
             if (requestBody != null) {
                 // 添加请求体
@@ -415,7 +426,7 @@ public class NetworkUtils {
             }
             request = httpPost;
         } else {
-            throw new IllegalArgumentException("不支持的请求方法: " + requestMethod);
+            throw new IllegalArgumentException("不支持的请求方法: " + httpMethod);
         }
         // 添加请求头
         if (requestHeaders != null) {
@@ -436,7 +447,13 @@ public class NetworkUtils {
         if (enableProxy) {
             infoLog("已启用代理服务器 ====> {}", requestConfig.getProxy());
         }
-        try (CloseableHttpClient httpClient = HttpClientBuilder.create().setDefaultRequestConfig(requestConfig).build()) {
+        PoolingHttpClientConnectionManager connectionManager = new PoolingHttpClientConnectionManager();
+        connectionManager.setMaxTotal(100);
+        connectionManager.setDefaultMaxPerRoute(20);
+        try (CloseableHttpClient httpClient = HttpClientBuilder.create()
+                .setDefaultRequestConfig(requestConfig)
+                .setConnectionManager(connectionManager)
+                .build()) {
             CloseableHttpResponse response = httpClient.execute(request);
             StatusLine statusLine = response.getStatusLine();
             HttpEntity httpEntity = response.getEntity();
@@ -448,20 +465,21 @@ public class NetworkUtils {
         }
         return StringUtils.EMPTY;
     }
+
     /**
      * 使用 OKHttp {@link OkHttpClient} 发起 HTTP 请求
      */
     private static String okhttpRequest(HttpRequestEntity hre) {
         Request request;
         String requestUrl = hre.getRequestUrl();
-        String requestMethod = hre.getRequestMethod().name();
+        String httpMethod = hre.getHttpMethod().name();
         Map<String, String> requestBody = hre.getRequestBody();
         Map<String, String> requestHeaders = hre.getRequestHeaders();
-        infoLog("请求的URL ====> {}, 请求方式 -> [{}], 请求时间戳 -> {}", requestUrl, requestMethod, hre.getEpoch());
+        infoLog("请求的URL ====> {}, 请求方式 -> [{}], 请求时间戳 -> {}", requestUrl, httpMethod, hre.getEpoch());
         Request.Builder builder = new Request.Builder().url(requestUrl);
-        if (requestMethod.equals(RequestMethod.GET.name())) {
+        if (httpMethod.equals(HttpMethod.GET.name())) {
             builder.get();
-        } else if (requestMethod.equals(RequestMethod.POST.name())) {
+        } else if (httpMethod.equals(HttpMethod.POST.name())) {
             if (requestBody != null) {
                 String contentType = requestHeaders == null ? MimeTypeUtils.APPLICATION_JSON_VALUE
                         : requestHeaders.containsKey(Header.CONTENT_TYPE.getValue())
@@ -487,7 +505,7 @@ public class NetworkUtils {
                 }
             }
         } else {
-            throw new IllegalArgumentException("不支持的请求方法: " + requestMethod);
+            throw new IllegalArgumentException("不支持的请求方法: " + httpMethod);
         }
         if (requestHeaders != null) {
             requestHeaders.forEach(builder::addHeader);
@@ -495,8 +513,12 @@ public class NetworkUtils {
         request = builder.build();
         Headers headers = request.headers();
         infoHeadersLog(Convert.prettyJson(headers.toMultimap()));
+        Dispatcher dispatcher = new Dispatcher();
+        dispatcher.setMaxRequests(10);
+        dispatcher.setMaxRequestsPerHost(5);
         OkHttpClient.Builder clientBuilder = new OkHttpClient()
                 .newBuilder()
+                .dispatcher(dispatcher)
                 .readTimeout(hre.getReadTimeout(), TimeUnit.MILLISECONDS)
                 .connectTimeout(hre.getConnectTimeout(), TimeUnit.MILLISECONDS);
 
@@ -530,23 +552,22 @@ public class NetworkUtils {
         HttpURLConnection connection = null;
         try {
             String requestUrl = hre.getRequestUrl();
-            String requestMethod = hre.getRequestMethod().name();
+            String httpMethod = hre.getHttpMethod().name();
             Map<String, String> requestHeaders = hre.getRequestHeaders();
             Map<String, String> requestBody = hre.getRequestBody();
             int connectTimeout = hre.getConnectTimeout();
             int readTimeout = hre.getReadTimeout();
-            log.info("请求的URL ====> {}, 请求方式 -> [{}], 请求时间戳 -> {}",
-                    requestUrl, requestMethod, hre.getEpoch());
+            infoLog("请求的URL ====> {}, 请求方式 -> [{}], 请求时间戳 -> {}", requestUrl, httpMethod, hre.getEpoch());
             URL url = new URL(requestUrl);
             System.setProperty("sun.net.http.allowRestrictedHeaders", "true");
             if (StringUtils.isNotEmpty(hre.getProxyHost())) {
                 java.net.Proxy proxy = new java.net.Proxy(java.net.Proxy.Type.HTTP, new InetSocketAddress(hre.getProxyHost(), hre.getProxyPort()));
                 connection = (HttpURLConnection) url.openConnection(proxy);
-                log.info("已启用代理服务器 ====> {}", proxy.address());
+                infoLog("已启用代理服务器 ====> {}", proxy.address());
             } else {
                 connection = (HttpURLConnection) url.openConnection();
             }
-            connection.setRequestMethod(requestMethod);
+            connection.setRequestMethod(httpMethod);
             if (requestHeaders != null) {
                 // 向 HTTP 请求中添加请求头
                 requestHeaders.forEach(connection::addRequestProperty);
@@ -560,25 +581,9 @@ public class NetworkUtils {
             // 设置 HTTP 请求允许从服务器读取数据
             connection.setDoInput(true);
             if (requestBody != null) {
-                String contentType = requestHeaders == null ? MimeTypeUtils.APPLICATION_JSON_VALUE
-                        : requestHeaders.containsKey(Header.CONTENT_TYPE.getValue())
-                        ? requestHeaders.remove(Header.CONTENT_TYPE.getValue()) : MimeTypeUtils.APPLICATION_JSON_VALUE;
-                String body;
-                if (ContentType.FORM_URLENCODED.getValue().equals(contentType)) {
-                    body = HttpUtil.toParams(requestBody);
-                } else if (ContentType.MULTIPART.getValue().equals(contentType)) {
-                    MultipartEntityBuilder multipartEntityBuilder = MultipartEntityBuilder.create();
-                    multipartEntityBuilder.setMode(HttpMultipartMode.BROWSER_COMPATIBLE);
-                    multipartEntityBuilder.setCharset(hre.getCharset());
-                    requestBody.forEach(multipartEntityBuilder::addTextBody);
-                    HttpEntity httpEntity = multipartEntityBuilder.build();
-                    org.apache.http.Header header = httpEntity.getContentType();
-                    // 更新下请求头Content-Type
-                    connection.setRequestProperty(header.getName(), header.getValue());
-                    body = formEntityToString(httpEntity);
-                } else {
-                    body = new org.json.JSONObject(requestBody).toString();
-                }
+                HttpURLConnection fc = connection;
+                String body = fromRequestBodyToString(requestBody, requestHeaders, hre.getCharset(),
+                        header -> fc.setRequestProperty(header.getName(), header.getValue()));
                 infoBodyLog(Convert.prettyJson(body));
                 byte[] bodyBytes = body.getBytes(StandardCharsets.UTF_8);
 
@@ -619,7 +624,7 @@ public class NetworkUtils {
             org.json.JSONObject responseHeaders = new org.json.JSONObject();
             // 响应头的第一行是状态行, 不是一个标准的 HTTP 头, 使用 null 作为key标识
             headerFields.forEach((key, value) -> responseHeaders.put(Objects.requireNonNullElse(key, "Status"), value));
-            log.info("响应头 ===> {}", responseHeaders.toString(4));
+            infoResponseHeaderLog(responseHeaders.toString(4));
             try (InputStream inputStream = connection.getInputStream();
                  FastByteArrayOutputStream outputStream = new FastByteArrayOutputStream()) {
                 byte[] buffer = new byte[4096];
@@ -648,9 +653,170 @@ public class NetworkUtils {
     }
 
     /**
-     * @param hre HTTP请求实体类
+     * 使用 {@link RestTemplate} 客户端发起 HTTP 请求
+     *
+     * @param hre 请求实体
+     * @return 响应字符串内容
+     */
+    private static String restTemplateRequest(HttpRequestEntity hre) {
+        String requestUrl = hre.getRequestUrl();
+        HttpMethod httpMethod = hre.getHttpMethod();
+        Map<String, String> requestBody = hre.getRequestBody();
+        Map<String, String> requestHeaders = hre.getRequestHeaders();
+        infoLog("请求的URL ====> {}, 请求方式 -> [{}], 请求时间戳 -> {}", requestUrl, httpMethod, hre.getEpoch());
+        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(hre.getConnectTimeout());
+        factory.setReadTimeout(hre.getReadTimeout());
+        if (StringUtils.isNotEmpty(hre.getProxyHost())) {
+            java.net.Proxy proxy = new java.net.Proxy(java.net.Proxy.Type.HTTP, new InetSocketAddress(hre.getProxyHost(), hre.getProxyPort()));
+            factory.setProxy(proxy);
+            infoLog("已启用代理服务器 ====> {}", proxy.address());
+        }
+        RestTemplate restTemplate = new RestTemplate(factory);
+        org.springframework.http.HttpHeaders headers = new org.springframework.http.HttpHeaders();
+        // 设置请求头
+        if (requestHeaders != null) {
+            requestHeaders.forEach(headers::add);
+        }
+        org.springframework.http.HttpEntity<?> entity;
+        if (requestBody != null) {
+            String contentType = requestHeaders == null ? MimeTypeUtils.APPLICATION_JSON_VALUE
+                    : requestHeaders.getOrDefault(Header.CONTENT_TYPE.getValue(), MimeTypeUtils.APPLICATION_JSON_VALUE);
+            if (ContentType.FORM_URLENCODED.getValue().equals(contentType) ||
+                    ContentType.MULTIPART.getValue().equals(contentType)) {
+                MultiValueMap<String, String> body = new LinkedMultiValueMap<>();
+                requestBody.forEach(body::add);
+                entity = new org.springframework.http.HttpEntity<>(body, headers);
+            } else {
+                entity = new org.springframework.http.HttpEntity<>(new JSONObject(requestBody).toString(), headers);
+            }
+        } else {
+            entity = new org.springframework.http.HttpEntity<>(headers);
+        }
+        log.info("请求实体 ===> {}", Convert.prettyJson(entity.toString()));
+        try {
+            ResponseEntity<String> response = restTemplate.exchange(requestUrl, httpMethod, entity, String.class);
+            String responseBody = response.getBody();
+            org.springframework.http.HttpHeaders responseHeaders = response.getHeaders();
+            infoResponseHeaderLog(Convert.prettyJson(responseHeaders.toSingleValueMap()));
+            infoResponseLog(response.getStatusCode(), Convert.prettyJson(responseBody));
+            return responseBody;
+        } catch (Exception e) {
+            logError(e);
+            return StringUtils.EMPTY;
+        }
+    }
+
+    /**
+     * 使用 JDK 11 {@link java.net.http.HttpClient} 发起 HTTP 请求
+     */
+    public static String httpClient(HttpRequestEntity hre) {
+        URI uri = URI.create(hre.getRequestUrl());
+        String httpMethod = hre.getHttpMethod().name();
+        Map<String, String> requestBody = hre.getRequestBody();
+        Map<String, String> requestHeaders = hre.getRequestHeaders();
+        infoLog("请求的URL ====> {}, 请求方式 -> [{}], 请求时间戳 -> {}", uri, httpMethod, hre.getEpoch());
+        java.net.http.HttpClient.Builder builder = java.net.http.HttpClient.newBuilder()
+                 // 用于控制建立连接的时间
+                .connectTimeout(Duration.of(hre.getConnectTimeout(), ChronoUnit.MILLIS));
+        if (StringUtils.isNotEmpty(hre.getProxyHost())) {
+            ProxySelector proxySelector = ProxySelector.of(new InetSocketAddress(hre.getProxyHost(), hre.getProxyPort()));
+            builder.proxy(proxySelector);
+            infoLog("已启用代理服务器 ====> {}", proxySelector.select(uri));
+        }
+        java.net.http.HttpClient client = builder.build();
+        java.net.http.HttpRequest.Builder requestBuilder = java.net.http.HttpRequest.newBuilder()
+                 // 用于控制整个请求的响应时间, 如果在指定的时间内没有收到响应, 请求将失败
+                .timeout(Duration.of(hre.getRequestTimeout(), ChronoUnit.MILLIS))
+                .version(java.net.http.HttpClient.Version.HTTP_1_1)
+                .uri(uri);
+        if (requestHeaders != null) {
+            requestHeaders.forEach(requestBuilder::setHeader);
+        }
+        java.net.http.HttpRequest.BodyPublisher bodyPublisher;
+        if (requestBody != null) {
+            String body = fromRequestBodyToString(requestBody, requestHeaders, hre.getCharset(),
+                    (header) -> requestBuilder.setHeader(header.getName(), header.getValue()));
+            infoBodyLog(Convert.prettyJson(body));
+            bodyPublisher = java.net.http.HttpRequest.BodyPublishers.ofString(body);
+        } else {
+            bodyPublisher = java.net.http.HttpRequest.BodyPublishers.noBody();
+        }
+        requestBuilder.method(httpMethod, bodyPublisher);
+        java.net.http.HttpRequest request = requestBuilder.build();
+        infoHeadersLog(Convert.prettyJson(request.headers().map()));
+        try {
+            java.net.http.HttpResponse<String> response = client.send(request, java.net.http.HttpResponse.BodyHandlers.ofString());
+            String responseBody = response.body();
+            infoResponseHeaderLog(Convert.prettyJson(response.headers().map()));
+            infoResponseLog(response.statusCode(), Convert.prettyJson(responseBody));
+            return responseBody;
+        } catch (Exception e) {
+            logError(e);
+        }
+        return StringUtils.EMPTY;
+    }
+
+    /**
+     * 使用 unirest {@link Unirest} 发起 HTTP 请求
+     */
+    private static String unirestRequest(HttpRequestEntity hre) {
+        String requestUrl = hre.getRequestUrl();
+        String httpMethod = hre.getHttpMethod().name();
+        infoLog("请求的URL ====> {}, 请求方式 -> [{}], 请求时间戳 -> {}", requestUrl, httpMethod, hre.getEpoch());
+        Config config = Unirest.config();
+        if (StringUtils.isNotEmpty(hre.getProxyHost())) {
+            kong.unirest.core.Proxy proxy = new kong.unirest.core.Proxy(hre.getProxyHost(), hre.getProxyPort());
+            config.proxy(proxy);
+            infoLog("已启用代理服务器 ====> {}", proxy.getHost() + StringPool.COLON + proxy.getPort());
+        }
+        config.requestTimeout(hre.getRequestTimeout());
+        config.connectTimeout(hre.getConnectTimeout());
+        Map<String, String> requestHeaders = hre.getRequestHeaders();
+        if (requestHeaders != null) {
+            requestHeaders.forEach(config::addDefaultHeader);
+        }
+        HttpRequestWithBody httpRequest = Unirest.request(httpMethod, requestUrl);
+        Map<String, String> requestBody = hre.getRequestBody();
+        kong.unirest.core.HttpRequest<?> hr;
+        if (requestBody != null) {
+            String contentType = requestHeaders == null
+                    ? MimeTypeUtils.APPLICATION_JSON_VALUE : requestHeaders.containsKey(Header.CONTENT_TYPE.getValue())
+                    ? requestHeaders.remove(Header.CONTENT_TYPE.getValue()) : MimeTypeUtils.APPLICATION_JSON_VALUE;
+            if (ContentType.FORM_URLENCODED.getValue().equals(contentType)) {
+                Map<String, Object> parameters = new HashMap<>(requestBody);
+                hr = httpRequest.fields(parameters);
+            } else if (ContentType.MULTIPART.getValue().equals(contentType)) {
+                kong.unirest.core.MultipartBody multipartBody = httpRequest.multiPartContent();
+                requestBody.forEach(multipartBody::field);
+                hr = multipartBody;
+            } else {
+                String body = new org.json.JSONObject(requestBody).toString();
+                hr = httpRequest.body(body);
+            }
+        } else {
+            hr = Unirest.request(httpMethod, requestUrl);
+        }
+        infoHeadersLog(fromHeadersToString(httpRequest.getHeaders().all()));
+        try {
+            kong.unirest.core.HttpResponse<String> httpResponse = hr.asString();
+            String responseBody = httpResponse.getBody();
+            kong.unirest.core.Headers responseHeaders = httpResponse.getHeaders();
+            int status = httpResponse.getStatus();
+            String statusText = httpResponse.getStatusText();
+            infoResponseHeaderLog(fromHeadersToString(responseHeaders.all()));
+            infoResponseLog(status + Symbol.WHITE_SPACE + statusText, Convert.prettyJson(responseBody));
+            return responseBody;
+        } catch (UnirestException e) {
+            logError(e);
+        }
+        return StringUtils.EMPTY;
+    }
+
+    /**
+     * @param hre    HTTP请求实体类
      * @param client 底层发起 HTTP 请求的 Client
-     * @return  HTTP请求返回的内容字符串, 读取失败返回空字符串
+     * @return HTTP请求返回的内容字符串, 读取失败返回空字符串
      */
     public static String httpRequest(HttpRequestEntity hre, ConversionMethod client) {
         switch (client) {
@@ -662,6 +828,15 @@ public class NetworkUtils {
             }
             case OKHTTP -> {
                 return okhttpRequest(hre);
+            }
+            case SPRING -> {
+                return restTemplateRequest(hre);
+            }
+            case JDK11 -> {
+                return httpClient(hre);
+            }
+            case UNIREST -> {
+                return unirestRequest(hre);
             }
             default -> throw new IllegalArgumentException("Unsupported HTTP Client: " + client);
         }
@@ -698,6 +873,47 @@ public class NetworkUtils {
         }
     }
 
+    public static String fromRequestBodyToString(Map<String, String> requestBody,
+                                                 Map<String, String> requestHeaders,
+                                                 Charset charset,
+                                                 Consumer<org.apache.http.Header> consumer) {
+        String body;
+        String contentType = requestHeaders == null ? MimeTypeUtils.APPLICATION_JSON_VALUE
+                : requestHeaders.containsKey(Header.CONTENT_TYPE.getValue())
+                ? requestHeaders.remove(Header.CONTENT_TYPE.getValue()) : MimeTypeUtils.APPLICATION_JSON_VALUE;
+        if (ContentType.FORM_URLENCODED.getValue().equals(contentType)) {
+            body = HttpUtil.toParams(requestBody);
+        } else if (ContentType.MULTIPART.getValue().equals(contentType)) {
+            MultipartEntityBuilder multipartEntityBuilder = MultipartEntityBuilder.create();
+            multipartEntityBuilder.setMode(HttpMultipartMode.BROWSER_COMPATIBLE);
+            multipartEntityBuilder.setCharset(charset);
+            requestBody.forEach(multipartEntityBuilder::addTextBody);
+            HttpEntity httpEntity = multipartEntityBuilder.build();
+            org.apache.http.Header header = httpEntity.getContentType();
+            // 更新下请求头Content-Type
+            consumer.accept(header);
+            body = formEntityToString(httpEntity);
+        } else {
+            body = new org.json.JSONObject(requestBody).toString();
+        }
+        return body;
+    }
+
+    private static String fromHeadersToString(List<kong.unirest.core.Header> headers) {
+        if (headers == null) {
+            return StringUtils.EMPTY;
+        }
+        Map<String, List<String>> collect = headers
+                .stream()
+                .collect(Collectors.groupingBy(
+                        kong.unirest.core.Header::getName,
+                        Collectors.mapping(kong.unirest.core.Header::getValue, Collectors.toList())
+                ));
+
+
+        return Convert.prettyJson(collect);
+    }
+
     public static void infoLog(String msg, Object... args) {
         log.info(msg, args);
     }
@@ -708,5 +924,17 @@ public class NetworkUtils {
 
     public static void infoBodyLog(String body) {
         infoLog("请求体 ===> {}", body);
+    }
+
+    public static void infoResponseHeaderLog(String responseHeader) {
+        infoLog("响应头 ===> {}", responseHeader);
+    }
+
+    public static void infoResponseLog(Object status, String responseBody) {
+        log.info("请求成功, 状态信息 ===> {}, 返回的响应信息为 ===> {}", status,
+                Convert.prettyJson(responseBody));
+    }
+    public static void logError(Exception e) {
+        log.error("请求失败, 错误信息为 ===> {}", e.getMessage(), e);
     }
 }

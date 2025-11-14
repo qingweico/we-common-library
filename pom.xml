@@ -329,7 +329,11 @@
             <artifactId>bcprov-jdk15on</artifactId>
             <version>1.70</version>
         </dependency>
-        <!-- GmSSL-Java -->
+        <dependency>
+            <groupId>com.konghq</groupId>
+            <artifactId>unirest-java-core</artifactId>
+            <version>4.4.5</version>
+        </dependency>
         <!-- //////////////////// 日志相关 //////////////////// -->
         <dependency>
             <groupId>ch.qos.logback</groupId>

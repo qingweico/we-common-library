@@ -3,7 +3,7 @@ package cn.qingweico.model;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NonNull;
-import org.springframework.web.bind.annotation.RequestMethod;
+import org.springframework.http.HttpMethod;
 
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
@@ -21,7 +21,7 @@ public class HttpRequestEntity {
     private String requestUrl;
     /*请求方式*/
     @Builder.Default
-    private RequestMethod requestMethod = RequestMethod.GET;
+    private HttpMethod httpMethod = HttpMethod.GET;
     /*请求头*/
     Map<String, String> requestHeaders;
     /*请求体*/
@@ -36,6 +36,9 @@ public class HttpRequestEntity {
     /*读取超时时间(ms)*/
     @Builder.Default
     private int readTimeout = 5000;
+    /*请求超时时间(ms)*/
+    @Builder.Default
+    private int requestTimeout = 10000;
     /*字符集*/
     @Builder.Default
     private Charset charset = StandardCharsets.UTF_8;
