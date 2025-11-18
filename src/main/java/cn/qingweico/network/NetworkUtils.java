@@ -1,5 +1,6 @@
 package cn.qingweico.network;
 
+import cn.hutool.core.text.StrPool;
 import cn.hutool.http.ContentType;
 import cn.hutool.http.Header;
 import cn.hutool.http.HttpUtil;
@@ -17,16 +18,17 @@ import com.google.gson.Gson;
 import com.google.gson.JsonParser;
 import com.google.gson.JsonSyntaxException;
 import jodd.util.StringPool;
-import kong.unirest.core.Config;
-import kong.unirest.core.HttpRequestWithBody;
-import kong.unirest.core.Unirest;
-import kong.unirest.core.UnirestException;
+import kong.unirest.*;
 import lombok.extern.slf4j.Slf4j;
 import okhttp3.*;
+import okhttp3.Headers;
+import okhttp3.MultipartBody;
 import okio.Buffer;
 import org.apache.commons.io.IOUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.http.*;
+import org.apache.http.HttpResponse;
+import org.apache.http.HttpStatus;
 import org.apache.http.client.HttpClient;
 import org.apache.http.client.config.RequestConfig;
 import org.apache.http.client.entity.UrlEncodedFormEntity;
@@ -44,6 +46,7 @@ import org.apache.http.impl.client.HttpClientBuilder;
 import org.apache.http.impl.client.HttpClients;
 import org.apache.http.impl.client.LaxRedirectStrategy;
 import org.apache.http.impl.conn.PoolingHttpClientConnectionManager;
+import org.apache.http.message.BasicHeader;
 import org.apache.http.message.BasicNameValuePair;
 import org.apache.http.util.EntityUtils;
 import org.springframework.http.HttpMethod;
@@ -55,6 +58,7 @@ import org.springframework.web.client.RestTemplate;
 import java.io.*;
 import java.lang.reflect.Proxy;
 import java.net.*;
+import java.net.http.HttpRequest;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -423,6 +427,10 @@ public class NetworkUtils {
                 infoBodyLog(formEntityToString(httpEntity));
                 httpPost.setEntity(httpEntity);
                 httpPost.setHeader(httpEntity.getContentType());
+            } else {
+                HttpEntity httpEntity = new StringEntity(StrPool.EMPTY_JSON, hre.getCharset());
+                httpPost.setEntity(httpEntity);
+                httpPost.setHeader(Header.CONTENT_TYPE.getValue(), ContentType.JSON.getValue());
             }
             request = httpPost;
         } else {
@@ -438,7 +446,8 @@ public class NetworkUtils {
         }
         RequestConfig.Builder builder = RequestConfig.custom()
                 .setConnectTimeout(hre.getConnectTimeout())
-                .setSocketTimeout(hre.getReadTimeout());
+                .setSocketTimeout(hre.getReadTimeout())
+                .setConnectionRequestTimeout(hre.getRequestTimeout());
         if (StringUtils.isNotEmpty(hre.getProxyHost())) {
             builder.setProxy(new HttpHost(hre.getProxyHost(), hre.getProxyPort()));
             enableProxy = true;
@@ -495,7 +504,7 @@ public class NetworkUtils {
                     requestBody.forEach(multipartBuilder::addFormDataPart);
                     body = multipartBuilder.build();
                 } else {
-                    body = RequestBody.create(new JSONObject(requestBody).toString(), mediaType);
+                    body = RequestBody.create(new org.json.JSONObject(requestBody).toString(), mediaType);
                 }
                 builder.post(body);
                 infoBodyLog(formBodyToString(body));
@@ -503,6 +512,11 @@ public class NetworkUtils {
                 if (mediaType != null) {
                     builder.addHeader(Header.CONTENT_TYPE.getValue(), mediaType.toString());
                 }
+            } else {
+                MediaType mediaType = MediaType.get(MimeTypeUtils.APPLICATION_JSON_VALUE);
+                RequestBody body = RequestBody.create(StrPool.EMPTY_JSON, mediaType);
+                builder.post(body);
+                builder.addHeader(Header.CONTENT_TYPE.getValue(), mediaType.toString());
             }
         } else {
             throw new IllegalArgumentException("不支持的请求方法: " + httpMethod);
@@ -520,7 +534,8 @@ public class NetworkUtils {
                 .newBuilder()
                 .dispatcher(dispatcher)
                 .readTimeout(hre.getReadTimeout(), TimeUnit.MILLISECONDS)
-                .connectTimeout(hre.getConnectTimeout(), TimeUnit.MILLISECONDS);
+                .connectTimeout(hre.getConnectTimeout(), TimeUnit.MILLISECONDS)
+                .callTimeout(hre.getRequestTimeout(), TimeUnit.MILLISECONDS);
 
         if (StringUtils.isNotEmpty(hre.getProxyHost())) {
             clientBuilder.proxy(new java.net.Proxy(java.net.Proxy.Type.HTTP, new InetSocketAddress(hre.getProxyHost(), hre.getProxyPort())));
@@ -580,7 +595,7 @@ public class NetworkUtils {
             connection.setUseCaches(false);
             // 设置 HTTP 请求允许从服务器读取数据
             connection.setDoInput(true);
-            if (requestBody != null) {
+            if (isRequestBodyAllowedHttpMethod(httpMethod)) {
                 HttpURLConnection fc = connection;
                 String body = fromRequestBodyToString(requestBody, requestHeaders, hre.getCharset(),
                         header -> fc.setRequestProperty(header.getName(), header.getValue()));
@@ -617,7 +632,7 @@ public class NetworkUtils {
                 }
             } else {
                 // 设置请求体前 getOutputStream 会设置 connecting 为 true, 避免 Already connected
-                NetworkUtils.infoHeadersLog(Convert.prettyJson(connection.getRequestProperties()));
+                infoHeadersLog(Convert.prettyJson(connection.getRequestProperties()));
             }
             // 服务器返回给客户端的响应头信息
             Map<String, List<String>> headerFields = connection.getHeaderFields();
@@ -679,21 +694,27 @@ public class NetworkUtils {
             requestHeaders.forEach(headers::add);
         }
         org.springframework.http.HttpEntity<?> entity;
-        if (requestBody != null) {
-            String contentType = requestHeaders == null ? MimeTypeUtils.APPLICATION_JSON_VALUE
-                    : requestHeaders.getOrDefault(Header.CONTENT_TYPE.getValue(), MimeTypeUtils.APPLICATION_JSON_VALUE);
-            if (ContentType.FORM_URLENCODED.getValue().equals(contentType) ||
-                    ContentType.MULTIPART.getValue().equals(contentType)) {
-                MultiValueMap<String, String> body = new LinkedMultiValueMap<>();
-                requestBody.forEach(body::add);
-                entity = new org.springframework.http.HttpEntity<>(body, headers);
+        if (isRequestBodyAllowedHttpMethod(httpMethod)) {
+            if (requestBody != null) {
+                String contentType = requestHeaders == null ? MimeTypeUtils.APPLICATION_JSON_VALUE
+                        : requestHeaders.getOrDefault(Header.CONTENT_TYPE.getValue(), MimeTypeUtils.APPLICATION_JSON_VALUE);
+                if (ContentType.FORM_URLENCODED.getValue().equals(contentType) ||
+                        ContentType.MULTIPART.getValue().equals(contentType)) {
+                    MultiValueMap<String, String> body = new LinkedMultiValueMap<>();
+                    requestBody.forEach(body::add);
+                    entity = new org.springframework.http.HttpEntity<>(body, headers);
+                } else {
+                    headers.setContentType(org.springframework.http.MediaType.APPLICATION_JSON);
+                    entity = new org.springframework.http.HttpEntity<>(new org.json.JSONObject(requestBody).toString(), headers);
+                }
             } else {
-                entity = new org.springframework.http.HttpEntity<>(new JSONObject(requestBody).toString(), headers);
+                headers.setContentType(org.springframework.http.MediaType.APPLICATION_JSON);
+                entity = new org.springframework.http.HttpEntity<>(Symbol.EMPTY_JSON, headers);
             }
+            log.info("请求实体 ===> {}", Convert.prettyJson(entity.toString()));
         } else {
             entity = new org.springframework.http.HttpEntity<>(headers);
         }
-        log.info("请求实体 ===> {}", Convert.prettyJson(entity.toString()));
         try {
             ResponseEntity<String> response = restTemplate.exchange(requestUrl, httpMethod, entity, String.class);
             String responseBody = response.getBody();
@@ -710,7 +731,7 @@ public class NetworkUtils {
     /**
      * 使用 JDK 11 {@link java.net.http.HttpClient} 发起 HTTP 请求
      */
-    public static String httpClient(HttpRequestEntity hre) {
+    public static String httpClientRequest(HttpRequestEntity hre) {
         URI uri = URI.create(hre.getRequestUrl());
         String httpMethod = hre.getHttpMethod().name();
         Map<String, String> requestBody = hre.getRequestBody();
@@ -734,13 +755,13 @@ public class NetworkUtils {
             requestHeaders.forEach(requestBuilder::setHeader);
         }
         java.net.http.HttpRequest.BodyPublisher bodyPublisher;
-        if (requestBody != null) {
+        if (isRequestBodyAllowedHttpMethod(httpMethod)) {
             String body = fromRequestBodyToString(requestBody, requestHeaders, hre.getCharset(),
                     (header) -> requestBuilder.setHeader(header.getName(), header.getValue()));
             infoBodyLog(Convert.prettyJson(body));
             bodyPublisher = java.net.http.HttpRequest.BodyPublishers.ofString(body);
         } else {
-            bodyPublisher = java.net.http.HttpRequest.BodyPublishers.noBody();
+            bodyPublisher = HttpRequest.BodyPublishers.noBody();
         }
         requestBuilder.method(httpMethod, bodyPublisher);
         java.net.http.HttpRequest request = requestBuilder.build();
@@ -758,7 +779,7 @@ public class NetworkUtils {
     }
 
     /**
-     * 使用 unirest {@link Unirest} 发起 HTTP 请求
+     * 使用 unirest {@link kong.unirest.Unirest} 发起 HTTP 请求
      */
     private static String unirestRequest(HttpRequestEntity hre) {
         String requestUrl = hre.getRequestUrl();
@@ -766,42 +787,50 @@ public class NetworkUtils {
         infoLog("请求的URL ====> {}, 请求方式 -> [{}], 请求时间戳 -> {}", requestUrl, httpMethod, hre.getEpoch());
         Config config = Unirest.config();
         if (StringUtils.isNotEmpty(hre.getProxyHost())) {
-            kong.unirest.core.Proxy proxy = new kong.unirest.core.Proxy(hre.getProxyHost(), hre.getProxyPort());
+            kong.unirest.Proxy proxy = new kong.unirest.Proxy(hre.getProxyHost(), hre.getProxyPort());
             config.proxy(proxy);
             infoLog("已启用代理服务器 ====> {}", proxy.getHost() + StringPool.COLON + proxy.getPort());
         }
-        config.requestTimeout(hre.getRequestTimeout());
+        config.socketTimeout(hre.getRequestTimeout());
         config.connectTimeout(hre.getConnectTimeout());
         Map<String, String> requestHeaders = hre.getRequestHeaders();
-        if (requestHeaders != null) {
-            requestHeaders.forEach(config::addDefaultHeader);
-        }
         HttpRequestWithBody httpRequest = Unirest.request(httpMethod, requestUrl);
         Map<String, String> requestBody = hre.getRequestBody();
-        kong.unirest.core.HttpRequest<?> hr;
-        if (requestBody != null) {
-            String contentType = requestHeaders == null
-                    ? MimeTypeUtils.APPLICATION_JSON_VALUE : requestHeaders.containsKey(Header.CONTENT_TYPE.getValue())
-                    ? requestHeaders.remove(Header.CONTENT_TYPE.getValue()) : MimeTypeUtils.APPLICATION_JSON_VALUE;
-            if (ContentType.FORM_URLENCODED.getValue().equals(contentType)) {
-                Map<String, Object> parameters = new HashMap<>(requestBody);
-                hr = httpRequest.fields(parameters);
-            } else if (ContentType.MULTIPART.getValue().equals(contentType)) {
-                kong.unirest.core.MultipartBody multipartBody = httpRequest.multiPartContent();
-                requestBody.forEach(multipartBody::field);
-                hr = multipartBody;
+        kong.unirest.HttpRequest<?> hr;
+        if (isRequestBodyAllowedHttpMethod(httpMethod)) {
+            if (requestBody != null) {
+                String contentType = requestHeaders == null
+                        ? MimeTypeUtils.APPLICATION_JSON_VALUE : requestHeaders.containsKey(Header.CONTENT_TYPE.getValue())
+                        ? requestHeaders.remove(Header.CONTENT_TYPE.getValue()) : MimeTypeUtils.APPLICATION_JSON_VALUE;
+                if (ContentType.FORM_URLENCODED.getValue().equals(contentType)) {
+                    Map<String, Object> parameters = new HashMap<>(requestBody);
+                    hr = httpRequest.fields(parameters);
+                } else if (ContentType.MULTIPART.getValue().equals(contentType)) {
+                    kong.unirest.MultipartBody multipartBody = httpRequest.multiPartContent();
+                    requestBody.forEach(multipartBody::field);
+                    hr = multipartBody;
+                } else {
+                    String body = new org.json.JSONObject(requestBody).toString();
+                    httpRequest.header(Header.CONTENT_TYPE.getValue(), contentType);
+                    hr = httpRequest.body(body);
+                }
             } else {
-                String body = new org.json.JSONObject(requestBody).toString();
-                hr = httpRequest.body(body);
+                httpRequest.header(Header.CONTENT_TYPE.getValue(), ContentType.JSON.getValue());
+                hr = httpRequest.body(Symbol.EMPTY_JSON);
             }
+            infoBodyLog(unirestBodyToString(hr));
         } else {
-            hr = Unirest.request(httpMethod, requestUrl);
+            hr = httpRequest;
+        }
+        if (requestHeaders != null) {
+            // 修复了 3.7.04 unirest-java 中 no multipart boundary was found 问题
+            hr.headers(requestHeaders);
         }
         infoHeadersLog(fromHeadersToString(httpRequest.getHeaders().all()));
         try {
-            kong.unirest.core.HttpResponse<String> httpResponse = hr.asString();
+            kong.unirest.HttpResponse<String> httpResponse = hr.asString();
             String responseBody = httpResponse.getBody();
-            kong.unirest.core.Headers responseHeaders = httpResponse.getHeaders();
+            kong.unirest.Headers responseHeaders = httpResponse.getHeaders();
             int status = httpResponse.getStatus();
             String statusText = httpResponse.getStatusText();
             infoResponseHeaderLog(fromHeadersToString(responseHeaders.all()));
@@ -833,7 +862,7 @@ public class NetworkUtils {
                 return restTemplateRequest(hre);
             }
             case JDK11 -> {
-                return httpClient(hre);
+                return httpClientRequest(hre);
             }
             case UNIREST -> {
                 return unirestRequest(hre);
@@ -878,40 +907,66 @@ public class NetworkUtils {
                                                  Charset charset,
                                                  Consumer<org.apache.http.Header> consumer) {
         String body;
-        String contentType = requestHeaders == null ? MimeTypeUtils.APPLICATION_JSON_VALUE
-                : requestHeaders.containsKey(Header.CONTENT_TYPE.getValue())
-                ? requestHeaders.remove(Header.CONTENT_TYPE.getValue()) : MimeTypeUtils.APPLICATION_JSON_VALUE;
-        if (ContentType.FORM_URLENCODED.getValue().equals(contentType)) {
-            body = HttpUtil.toParams(requestBody);
-        } else if (ContentType.MULTIPART.getValue().equals(contentType)) {
-            MultipartEntityBuilder multipartEntityBuilder = MultipartEntityBuilder.create();
-            multipartEntityBuilder.setMode(HttpMultipartMode.BROWSER_COMPATIBLE);
-            multipartEntityBuilder.setCharset(charset);
-            requestBody.forEach(multipartEntityBuilder::addTextBody);
-            HttpEntity httpEntity = multipartEntityBuilder.build();
-            org.apache.http.Header header = httpEntity.getContentType();
-            // 更新下请求头Content-Type
-            consumer.accept(header);
-            body = formEntityToString(httpEntity);
+        if (requestBody != null) {
+            String contentType = requestHeaders == null ? MimeTypeUtils.APPLICATION_JSON_VALUE
+                    : requestHeaders.containsKey(Header.CONTENT_TYPE.getValue())
+                    ? requestHeaders.remove(Header.CONTENT_TYPE.getValue()) : MimeTypeUtils.APPLICATION_JSON_VALUE;
+            if (ContentType.FORM_URLENCODED.getValue().equals(contentType)) {
+                body = HttpUtil.toParams(requestBody);
+            } else if (ContentType.MULTIPART.getValue().equals(contentType)) {
+                MultipartEntityBuilder multipartEntityBuilder = MultipartEntityBuilder.create();
+                multipartEntityBuilder.setMode(HttpMultipartMode.BROWSER_COMPATIBLE);
+                multipartEntityBuilder.setCharset(charset);
+                requestBody.forEach(multipartEntityBuilder::addTextBody);
+                HttpEntity httpEntity = multipartEntityBuilder.build();
+                org.apache.http.Header header = httpEntity.getContentType();
+                // 更新下请求头Content-Type
+                consumer.accept(header);
+                body = formEntityToString(httpEntity);
+            } else {
+                org.apache.http.Header header = new BasicHeader(Header.CONTENT_TYPE.getValue(), contentType);
+                consumer.accept(header);
+                body = new JSONObject(requestBody).toString();
+            }
         } else {
-            body = new org.json.JSONObject(requestBody).toString();
+            org.apache.http.Header header = new BasicHeader(Header.CONTENT_TYPE.getValue(), ContentType.JSON.getValue());
+            consumer.accept(header);
+            body = StrPool.EMPTY_JSON;
         }
         return body;
     }
 
-    private static String fromHeadersToString(List<kong.unirest.core.Header> headers) {
+    private static String fromHeadersToString(List<kong.unirest.Header> headers) {
         if (headers == null) {
             return StringUtils.EMPTY;
         }
         Map<String, List<String>> collect = headers
                 .stream()
                 .collect(Collectors.groupingBy(
-                        kong.unirest.core.Header::getName,
-                        Collectors.mapping(kong.unirest.core.Header::getValue, Collectors.toList())
+                        kong.unirest.Header::getName,
+                        Collectors.mapping(kong.unirest.Header::getValue, Collectors.toList())
                 ));
 
 
         return Convert.prettyJson(collect);
+    }
+
+    private static String unirestBodyToString(kong.unirest.HttpRequest<?> hr) {
+        Optional<Body> optional = hr.getBody();
+        Object rbs = Symbol.EMPTY;
+        if (optional.isPresent()) {
+            Body body = optional.get();
+            if (body.isEntityBody()) {
+                rbs = body.uniPart().getValue().toString();
+            } else {
+                rbs = body.multiParts().stream()
+                        .collect(Collectors.groupingBy(
+                                BodyPart::getName,
+                                Collectors.mapping(BodyPart::getValue, Collectors.toList())
+                        ));
+            }
+        }
+        return Convert.prettyJson(rbs);
     }
 
     public static void infoLog(String msg, Object... args) {
@@ -936,5 +991,14 @@ public class NetworkUtils {
     }
     public static void logError(Exception e) {
         log.error("请求失败, 错误信息为 ===> {}", e.getMessage(), e);
+    }
+
+    private static boolean isRequestBodyAllowedHttpMethod(HttpMethod httpMethod) {
+        return HttpMethod.POST.equals(httpMethod) || HttpMethod.PUT.equals(httpMethod) ||
+                HttpMethod.PATCH.equals(httpMethod) || HttpMethod.DELETE.equals(httpMethod);
+    }
+
+    private static boolean isRequestBodyAllowedHttpMethod(String httpMethod) {
+        return isRequestBodyAllowedHttpMethod(HttpMethod.valueOf(httpMethod));
     }
 }

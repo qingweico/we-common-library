@@ -331,8 +331,8 @@
         </dependency>
         <dependency>
             <groupId>com.konghq</groupId>
-            <artifactId>unirest-java-core</artifactId>
-            <version>4.4.5</version>
+            <artifactId>unirest-java</artifactId>
+            <version>3.14.5</version>
         </dependency>
         <!-- //////////////////// 日志相关 //////////////////// -->
         <dependency>
