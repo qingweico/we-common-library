@@ -14,7 +14,6 @@ import cn.qingweico.model.RequestConfigOptions;
 import cn.qingweico.model.enums.ConversionMethod;
 import cn.qingweico.network.http.HttpInvocationHandler;
 import com.google.common.io.Closeables;
-import com.google.gson.Gson;
 import com.google.gson.JsonParser;
 import com.google.gson.JsonSyntaxException;
 import jodd.util.StringPool;
@@ -419,8 +418,7 @@ public class NetworkUtils {
                     // Add FileBody
                     httpEntity = multipartEntityBuilder.build();
                 } else {
-                    Gson gson = new Gson();
-                    StringEntity stringEntity = new StringEntity(gson.toJson(requestBody), hre.getCharset());
+                    StringEntity stringEntity = new StringEntity(mergeRequestBodyIfNecesaryToString(requestBody, hre.getComplexBody()), hre.getCharset());
                     stringEntity.setContentType(contentType);
                     httpEntity = stringEntity;
                 }
@@ -504,7 +502,7 @@ public class NetworkUtils {
                     requestBody.forEach(multipartBuilder::addFormDataPart);
                     body = multipartBuilder.build();
                 } else {
-                    body = RequestBody.create(new org.json.JSONObject(requestBody).toString(), mediaType);
+                    body = RequestBody.create(mergeRequestBodyIfNecesaryToString(requestBody, hre.getComplexBody()), mediaType);
                 }
                 builder.post(body);
                 infoBodyLog(formBodyToString(body));
@@ -597,7 +595,7 @@ public class NetworkUtils {
             connection.setDoInput(true);
             if (isRequestBodyAllowedHttpMethod(httpMethod)) {
                 HttpURLConnection fc = connection;
-                String body = fromRequestBodyToString(requestBody, requestHeaders, hre.getCharset(),
+                String body = fromRequestBodyToString(requestBody, requestHeaders, hre.getComplexBody(), hre.getCharset(),
                         header -> fc.setRequestProperty(header.getName(), header.getValue()));
                 infoBodyLog(Convert.prettyJson(body));
                 byte[] bodyBytes = body.getBytes(StandardCharsets.UTF_8);
@@ -705,7 +703,7 @@ public class NetworkUtils {
                     entity = new org.springframework.http.HttpEntity<>(body, headers);
                 } else {
                     headers.setContentType(org.springframework.http.MediaType.APPLICATION_JSON);
-                    entity = new org.springframework.http.HttpEntity<>(new org.json.JSONObject(requestBody).toString(), headers);
+                    entity = new org.springframework.http.HttpEntity<>(mergeRequestBodyIfNecesaryToString(requestBody, hre.getComplexBody()), headers);
                 }
             } else {
                 headers.setContentType(org.springframework.http.MediaType.APPLICATION_JSON);
@@ -756,7 +754,7 @@ public class NetworkUtils {
         }
         java.net.http.HttpRequest.BodyPublisher bodyPublisher;
         if (isRequestBodyAllowedHttpMethod(httpMethod)) {
-            String body = fromRequestBodyToString(requestBody, requestHeaders, hre.getCharset(),
+            String body = fromRequestBodyToString(requestBody, requestHeaders, hre.getComplexBody(), hre.getCharset(),
                     (header) -> requestBuilder.setHeader(header.getName(), header.getValue()));
             infoBodyLog(Convert.prettyJson(body));
             bodyPublisher = java.net.http.HttpRequest.BodyPublishers.ofString(body);
@@ -810,7 +808,7 @@ public class NetworkUtils {
                     requestBody.forEach(multipartBody::field);
                     hr = multipartBody;
                 } else {
-                    String body = new org.json.JSONObject(requestBody).toString();
+                    String body = mergeRequestBodyIfNecesaryToString(requestBody, hre.getComplexBody());
                     httpRequest.header(Header.CONTENT_TYPE.getValue(), contentType);
                     hr = httpRequest.body(body);
                 }
@@ -904,6 +902,7 @@ public class NetworkUtils {
 
     public static String fromRequestBodyToString(Map<String, String> requestBody,
                                                  Map<String, String> requestHeaders,
+                                                 Map<String, Object> complexBody,
                                                  Charset charset,
                                                  Consumer<org.apache.http.Header> consumer) {
         String body;
@@ -926,7 +925,7 @@ public class NetworkUtils {
             } else {
                 org.apache.http.Header header = new BasicHeader(Header.CONTENT_TYPE.getValue(), contentType);
                 consumer.accept(header);
-                body = new JSONObject(requestBody).toString();
+                body = mergeRequestBodyIfNecesaryToString(requestBody, complexBody);
             }
         } else {
             org.apache.http.Header header = new BasicHeader(Header.CONTENT_TYPE.getValue(), ContentType.JSON.getValue());
@@ -1001,4 +1000,15 @@ public class NetworkUtils {
     private static boolean isRequestBodyAllowedHttpMethod(String httpMethod) {
         return isRequestBodyAllowedHttpMethod(HttpMethod.valueOf(httpMethod));
     }
+
+    public static String mergeRequestBodyIfNecesaryToString(Map<String, String> requestBody,
+                                                            Map<String, Object> complexBody) {
+        org.json.JSONObject jo = new org.json.JSONObject(requestBody);
+        if (complexBody != null) {
+            complexBody.forEach(jo::put);
+        }
+        return jo.toString();
+    }
+
+
 }

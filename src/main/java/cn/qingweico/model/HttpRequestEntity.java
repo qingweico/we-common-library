@@ -26,6 +26,8 @@ public class HttpRequestEntity {
     Map<String, String> requestHeaders;
     /*请求体*/
     Map<String, String> requestBody;
+    /*复杂对象请求体*/
+    Map<String, Object> complexBody;
     /*代理域名*/
     private String proxyHost;
     /*代理端口*/
