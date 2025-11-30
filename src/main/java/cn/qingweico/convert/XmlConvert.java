@@ -178,7 +178,7 @@ public class XmlConvert {
         XmlNode xmlNode = xmlConvert.fromXml(xmlSource);
         Map<String, Object> xmlMap = xmlConvert.toMap(xmlNode);
         System.out.println("Xml -> XmlNode -> Map");
-        System.out.println(Convert.prettyJson(xmlMap));
+        System.out.println(StringConvert.prettyJson(xmlMap));
         System.out.println("Map -> XmlNode -> Xml");
         System.out.println(xmlConvert.toXml(xmlConvert.fromMap(xmlMap, xmlNode.getName())));
     }

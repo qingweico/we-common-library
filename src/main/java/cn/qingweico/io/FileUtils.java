@@ -6,7 +6,8 @@ import cn.qingweico.concurrent.pool.ThreadPoolBuilder;
 import cn.qingweico.constants.Constants;
 import cn.qingweico.constants.FileSuffixConstants;
 import cn.qingweico.constants.Symbol;
-import cn.qingweico.convert.Convert;
+import cn.qingweico.convert.ByteUnitConverter;
+import cn.qingweico.convert.TimeUnitConverter;
 import cn.qingweico.model.*;
 import cn.qingweico.network.NetworkUtils;
 import com.google.common.io.ByteStreams;
@@ -401,7 +402,7 @@ public final class FileUtils {
             try (BufferedInputStream bf = new BufferedInputStream(new FileInputStream(in))) {
                 byte[] data = new byte[bf.available()];
                 int read = bf.read(data);
-                log.info("文件 {} 大小为 {}", in.getAbsolutePath(), Convert.byteCountToDisplaySize(read));
+                log.info("文件 {} 大小为 {}", in.getAbsolutePath(), ByteUnitConverter.convert(read));
                 return data;
             }
         } catch (IOException e) {
@@ -884,17 +885,17 @@ public final class FileUtils {
                 // 确保文件写入操作完成后再获取文件大小(try块结束时,
                 // BufferedWriter会被自动关闭,并触发close方法,确保
                 // 所有缓冲区中的数据被写入到文件中,并且文件被正确关闭)
-                log.info("合并后的文件大小为: {}", Convert.byteCountToDisplaySize(targetFile.toFile().length()));
+                log.info("合并后的文件大小为: {}", ByteUnitConverter.convert(targetFile.toFile().length()));
             }
             sw.stop();
-            log.info("合并耗时: {}", Convert.convertMills(sw.getTime()));
+            log.info("合并耗时: {}", TimeUnitConverter.convertMills(sw.getTime()));
         } catch (IOException e) {
             log.error(e.getMessage(), e);
         }
     }
 
     private static void logFileInfo(String fileName, long size) {
-        log.info("\t 文件名称: {} - 文件大小: {}", fileName, Convert.byteCountToDisplaySize(size));
+        log.info("\t 文件名称: {} - 文件大小: {}", fileName, ByteUnitConverter.convert(size));
     }
 
 

@@ -24,13 +24,14 @@ public class CustomizableRejectedExecutionHandler implements RejectedExecutionHa
 
     @Override
     public void rejectedExecution(Runnable r, ThreadPoolExecutor executor) {
-        // main thread execute
         if (!executor.isShutdown()) {
+            // just tip
+            log.info("Thread Pool Rejected Task, Main Thread Execute...");
+            // main thread execute
             r.run();
+        } else {
+            log.error("ThreadPoolExecutor {} isShutdown", executor);
         }
-        // just tip
-        log.info("Thread Pool Rejected Task, Main Thread Execute...");
-
     }
 
     public static void main(String[] args) {

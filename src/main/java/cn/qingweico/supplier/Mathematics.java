@@ -54,6 +54,19 @@ public final class Mathematics {
         return i;
     }
 
+    public static double complexMathCalc() {
+        double result = 0.0;
+        double v = Math.pow(Math.exp(1), Math.acos(-1));
+        double asin;
+        for (int i = 0; i < 100L; i++) {
+            double a = Math.random() * i;
+            asin = Math.random() * 2 - 1;
+            result += Math.sqrt((Math.exp(i) * v + Math.asin(asin) * Math.atan(v)) / Math.log(v))
+                    * Math.cbrt(a * Math.exp(a) * Math.abs(asin));
+        }
+        return result;
+    }
+
     public static void main(String[] args) {
         System.out.println(calcPi());
         System.out.println(fastPower(2, 10));

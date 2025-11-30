@@ -2,7 +2,7 @@ package cn.qingweico.collection;
 
 
 import cn.hutool.core.lang.UUID;
-import cn.qingweico.convert.Convert;
+import cn.qingweico.convert.StringConvert;
 import cn.qingweico.supplier.RandomDataGenerator;
 
 import java.util.*;
@@ -41,6 +41,9 @@ public final class CollUtils {
         return new LinkedList<>();
     }
 
+    /**
+     * {@link com.google.common.collect.Maps#newHashMapWithExpectedSize(int)}
+     */
     public static int mapSize(int exceptedSize) {
         return (int) ((float) exceptedSize / 0.75F + 1.0F);
     }
@@ -60,7 +63,7 @@ public final class CollUtils {
         Map<String, Object> t = new HashMap<>(mapSize(retList.size()));
         t.putAll(retList.stream()
                 .collect(Collectors.toMap(map ->
-                                Convert.toString(map.get(key)), map -> map.get(value),
+                                StringConvert.toString(map.get(key)), map -> map.get(value),
                         (oldK, newK) -> oldK)));
         return t;
 

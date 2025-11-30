@@ -7,7 +7,7 @@ import cn.hutool.http.HttpUtil;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
 import cn.qingweico.constants.Symbol;
-import cn.qingweico.convert.Convert;
+import cn.qingweico.convert.StringConvert;
 import cn.qingweico.model.HttpRequestEntity;
 import cn.qingweico.model.Poem;
 import cn.qingweico.model.RequestConfigOptions;
@@ -440,7 +440,7 @@ public class NetworkUtils {
             requestHeaders = Arrays.stream(request.getAllHeaders())
                     .collect(Collectors.toMap(org.apache.http.Header::getName,
                             org.apache.http.Header::getValue));
-            infoHeadersLog(Convert.prettyJson(requestHeaders));
+            infoHeadersLog(StringConvert.prettyJson(requestHeaders));
         }
         RequestConfig.Builder builder = RequestConfig.custom()
                 .setConnectTimeout(hre.getConnectTimeout())
@@ -465,7 +465,7 @@ public class NetworkUtils {
             StatusLine statusLine = response.getStatusLine();
             HttpEntity httpEntity = response.getEntity();
             String result = EntityUtils.toString(httpEntity, hre.getCharset());
-            log.info("请求成功, 返回的状态信息为 ===> {}, 响应信息为 ===> {}", statusLine.toString(), Convert.prettyJson(result));
+            log.info("请求成功, 返回的状态信息为 ===> {}, 响应信息为 ===> {}", statusLine.toString(), StringConvert.prettyJson(result));
             return result;
         } catch (IOException e) {
             log.error("请求失败, 异常信息为 ===> {}", e.getMessage(), e);
@@ -524,7 +524,7 @@ public class NetworkUtils {
         }
         request = builder.build();
         Headers headers = request.headers();
-        infoHeadersLog(Convert.prettyJson(headers.toMultimap()));
+        infoHeadersLog(StringConvert.prettyJson(headers.toMultimap()));
         Dispatcher dispatcher = new Dispatcher();
         dispatcher.setMaxRequests(10);
         dispatcher.setMaxRequestsPerHost(5);
@@ -546,7 +546,7 @@ public class NetworkUtils {
                 ResponseBody responseBody = response.body();
                 if (responseBody != null) {
                     String result = responseBody.string();
-                    log.info("请求成功, 响应信息为 ===> {}", Convert.prettyJson(result));
+                    log.info("请求成功, 响应信息为 ===> {}", StringConvert.prettyJson(result));
                     return result;
                 }
             } else {
@@ -597,7 +597,7 @@ public class NetworkUtils {
                 HttpURLConnection fc = connection;
                 String body = fromRequestBodyToString(requestBody, requestHeaders, hre.getComplexBody(), hre.getCharset(),
                         header -> fc.setRequestProperty(header.getName(), header.getValue()));
-                infoBodyLog(Convert.prettyJson(body));
+                infoBodyLog(StringConvert.prettyJson(body));
                 byte[] bodyBytes = body.getBytes(StandardCharsets.UTF_8);
 
                 boolean isGzip = isGzip(connection.getRequestProperties());
@@ -611,7 +611,7 @@ public class NetworkUtils {
                     // 设置 HTTP 请求的传输模式为分块传输(适用于发送大量数据或流式数据, 可以避免将所有数据缓冲在内存中)
                     connection.setChunkedStreamingMode(8196);
                 }
-                infoHeadersLog(Convert.prettyJson(connection.getRequestProperties()));
+                infoHeadersLog(StringConvert.prettyJson(connection.getRequestProperties()));
                 OutputStream os = null;
 
                 try {
@@ -630,7 +630,7 @@ public class NetworkUtils {
                 }
             } else {
                 // 设置请求体前 getOutputStream 会设置 connecting 为 true, 避免 Already connected
-                infoHeadersLog(Convert.prettyJson(connection.getRequestProperties()));
+                infoHeadersLog(StringConvert.prettyJson(connection.getRequestProperties()));
             }
             // 服务器返回给客户端的响应头信息
             Map<String, List<String>> headerFields = connection.getHeaderFields();
@@ -646,13 +646,13 @@ public class NetworkUtils {
                     outputStream.write(buffer, 0, bytesRead);
                 }
                 String response = outputStream.toString();
-                log.info("请求成功, 返回的响应信息为 ===> {}", Convert.prettyJson(response));
+                log.info("请求成功, 返回的响应信息为 ===> {}", StringConvert.prettyJson(response));
                 return response;
             } catch (IOException e) {
                 log.error("请求发生异常 ===> {}", e.getCause() != null ? e.getCause().getMessage() : e.getMessage());
                 if (connection.getErrorStream() != null) {
                     String errResponse = IOUtils.toString(connection.getErrorStream(), StandardCharsets.UTF_8);
-                    log.info("响应的异常信息为 ===> {}", Convert.prettyJson(errResponse));
+                    log.info("响应的异常信息为 ===> {}", StringConvert.prettyJson(errResponse));
                 }
             }
         } catch (Exception e) {
@@ -709,7 +709,7 @@ public class NetworkUtils {
                 headers.setContentType(org.springframework.http.MediaType.APPLICATION_JSON);
                 entity = new org.springframework.http.HttpEntity<>(Symbol.EMPTY_JSON, headers);
             }
-            log.info("请求实体 ===> {}", Convert.prettyJson(entity.toString()));
+            log.info("请求实体 ===> {}", StringConvert.prettyJson(entity.toString()));
         } else {
             entity = new org.springframework.http.HttpEntity<>(headers);
         }
@@ -717,8 +717,8 @@ public class NetworkUtils {
             ResponseEntity<String> response = restTemplate.exchange(requestUrl, httpMethod, entity, String.class);
             String responseBody = response.getBody();
             org.springframework.http.HttpHeaders responseHeaders = response.getHeaders();
-            infoResponseHeaderLog(Convert.prettyJson(responseHeaders.toSingleValueMap()));
-            infoResponseLog(response.getStatusCode(), Convert.prettyJson(responseBody));
+            infoResponseHeaderLog(StringConvert.prettyJson(responseHeaders.toSingleValueMap()));
+            infoResponseLog(response.getStatusCode(), StringConvert.prettyJson(responseBody));
             return responseBody;
         } catch (Exception e) {
             logError(e);
@@ -756,19 +756,19 @@ public class NetworkUtils {
         if (isRequestBodyAllowedHttpMethod(httpMethod)) {
             String body = fromRequestBodyToString(requestBody, requestHeaders, hre.getComplexBody(), hre.getCharset(),
                     (header) -> requestBuilder.setHeader(header.getName(), header.getValue()));
-            infoBodyLog(Convert.prettyJson(body));
+            infoBodyLog(StringConvert.prettyJson(body));
             bodyPublisher = java.net.http.HttpRequest.BodyPublishers.ofString(body);
         } else {
             bodyPublisher = HttpRequest.BodyPublishers.noBody();
         }
         requestBuilder.method(httpMethod, bodyPublisher);
         java.net.http.HttpRequest request = requestBuilder.build();
-        infoHeadersLog(Convert.prettyJson(request.headers().map()));
+        infoHeadersLog(StringConvert.prettyJson(request.headers().map()));
         try {
             java.net.http.HttpResponse<String> response = client.send(request, java.net.http.HttpResponse.BodyHandlers.ofString());
             String responseBody = response.body();
-            infoResponseHeaderLog(Convert.prettyJson(response.headers().map()));
-            infoResponseLog(response.statusCode(), Convert.prettyJson(responseBody));
+            infoResponseHeaderLog(StringConvert.prettyJson(response.headers().map()));
+            infoResponseLog(response.statusCode(), StringConvert.prettyJson(responseBody));
             return responseBody;
         } catch (Exception e) {
             logError(e);
@@ -832,7 +832,7 @@ public class NetworkUtils {
             int status = httpResponse.getStatus();
             String statusText = httpResponse.getStatusText();
             infoResponseHeaderLog(fromHeadersToString(responseHeaders.all()));
-            infoResponseLog(status + Symbol.WHITE_SPACE + statusText, Convert.prettyJson(responseBody));
+            infoResponseLog(status + Symbol.WHITE_SPACE + statusText, StringConvert.prettyJson(responseBody));
             return responseBody;
         } catch (UnirestException e) {
             logError(e);
@@ -882,7 +882,7 @@ public class NetworkUtils {
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             entity.writeTo(out);
             String content = out.toString();
-            return Convert.prettyJson(content);
+            return StringConvert.prettyJson(content);
         } catch (Exception e) {
             log.error(e.getMessage(), e);
             return StringUtils.EMPTY;
@@ -894,7 +894,7 @@ public class NetworkUtils {
             Buffer buffer = new Buffer();
             formBody.writeTo(buffer);
             String content = buffer.readUtf8();
-            return Convert.prettyJson(content);
+            return StringConvert.prettyJson(content);
         } catch (IOException e) {
             return null;
         }
@@ -947,7 +947,7 @@ public class NetworkUtils {
                 ));
 
 
-        return Convert.prettyJson(collect);
+        return StringConvert.prettyJson(collect);
     }
 
     private static String unirestBodyToString(kong.unirest.HttpRequest<?> hr) {
@@ -965,7 +965,7 @@ public class NetworkUtils {
                         ));
             }
         }
-        return Convert.prettyJson(rbs);
+        return StringConvert.prettyJson(rbs);
     }
 
     public static void infoLog(String msg, Object... args) {
@@ -986,7 +986,7 @@ public class NetworkUtils {
 
     public static void infoResponseLog(Object status, String responseBody) {
         log.info("请求成功, 状态信息 ===> {}, 返回的响应信息为 ===> {}", status,
-                Convert.prettyJson(responseBody));
+                StringConvert.prettyJson(responseBody));
     }
     public static void logError(Exception e) {
         log.error("请求失败, 错误信息为 ===> {}", e.getMessage(), e);
