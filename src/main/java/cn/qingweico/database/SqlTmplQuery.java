@@ -15,7 +15,6 @@ import java.util.Map;
  * @date 2025/11/7
  */
 @Slf4j
-@Service
 public class SqlTmplQuery {
 
     private final JdbcTemplate jdbcTemplate;

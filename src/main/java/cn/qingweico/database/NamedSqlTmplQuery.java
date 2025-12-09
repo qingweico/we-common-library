@@ -6,7 +6,6 @@ import org.springframework.dao.DataAccessException;
 import org.springframework.dao.IncorrectResultSizeDataAccessException;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
-import org.springframework.stereotype.Service;
 
 import java.util.Collections;
 import java.util.List;
@@ -17,7 +16,6 @@ import java.util.Map;
  * @date 2025/11/7
  */
 @Slf4j
-@Service
 public class NamedSqlTmplQuery {
 
     private final NamedParameterJdbcTemplate jdbcTemplate;
