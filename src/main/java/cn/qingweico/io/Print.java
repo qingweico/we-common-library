@@ -86,16 +86,18 @@ public final class Print {
 
     /**
      * The new Java SE 5 printf() (from C)
+     * 避免手动关闭 {@link  System#out}, 因为其是一个特殊的全局 PrintStream
+     * 通常由 JVM 管理以及初始化, 若使用try-with-resource关闭或者主动关闭,
+     * 后续 PrintStream 类中的 trouble 字段会被设置为 true, 直到流被关闭或重置,
+     * 且程序中不会有任何提示或者报错, 所有标准输出操作都会失败, 静默失败处理(Fail-Silent)
+     * 使用 {@link PrintStream#checkError()} 来检查 trouble 字段状态
      *
      * @param format Format string syntax
      * @param args   Arguments referenced by the format specifiers in the format string.
-     * @return This output stream
      */
-    public static PrintStream printf(String format, Object... args) {
-        try (PrintStream printStream = System.out.printf(format, args)) {
-            printStream.flush();
-            return printStream;
-        }
+    public static void printf(String format, Object... args) {
+        PrintStream printStream = System.out.printf(format, args);
+        printStream.flush();
     }
 
     /**
@@ -104,9 +106,7 @@ public final class Print {
      * @param time long time
      */
     public static void time(String title, long time) {
-        try (PrintStream printStream = printf("%s time %s %d %s%n", title, Symbol.COLON, time, Constants.MS)) {
-            printStream.flush();
-        }
+        printf("%s time %s %d %s%n", title, Symbol.COLON, time, Constants.MS);
     }
 
     /**
