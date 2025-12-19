@@ -53,6 +53,10 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.util.*;
 import org.springframework.web.client.RestTemplate;
+import org.springframework.web.reactive.function.BodyInserters;
+import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
+import org.springframework.http.client.reactive.ReactorClientHttpConnector;
 
 import java.io.*;
 import java.lang.reflect.Proxy;
@@ -69,13 +73,26 @@ import java.util.stream.Collectors;
 import java.util.zip.GZIPOutputStream;
 import java.util.zip.InflaterOutputStream;
 
+import io.netty.channel.ChannelOption;
+import reactor.netty.transport.ProxyProvider;
+
 /**
  * @author zqw
  * @date 2022/6/25
  */
 @Slf4j
 public class NetworkUtils {
-    public static String getLocalMac(InetAddress ia) throws SocketException {
+    /**
+     * 返回机器的硬件地址(通常是 MAC 地址)
+     * Mac OS平台上使用 {@link InetAddress#getLocalHost()} 获取的是本地回环地址
+     * 使用 {@link NetworkInterface#getByInetAddress(InetAddress)} 根据回环地址获取的
+     * 本地回环接口(lo0)没有 Mac 地址, 需要根据不同平台去特定处理
+     *
+     * @return MAC 地址
+     * @throws SocketException SocketException
+     */
+    public static String getLocalMac() throws SocketException {
+        InetAddress ia = NetworkAddressResolver.getLocalAddress();
         byte[] macAddress = NetworkInterface.getByInetAddress(ia).getHardwareAddress();
         log.info("Mac Array: [{}], Mac Byte Array Length: {}", Arrays.toString(macAddress), macAddress.length);
         StringBuilder result = new StringBuilder();
@@ -255,7 +272,7 @@ public class NetworkUtils {
     }
 
     public static void main(String[] args) throws UnknownHostException, SocketException {
-        log.info("Mac Address: {}", getLocalMac(Inet4Address.getLocalHost()));
+        log.info("Mac Address: {}", getLocalMac());
     }
 
     /**
@@ -374,11 +391,11 @@ public class NetworkUtils {
     }
 
 
-    public static boolean isGzip(Map<String, List<String>> headers) {
+    private static boolean isGzip(Map<String, List<String>> headers) {
         return getHeaderList(headers, Header.CONTENT_ENCODING.getValue()).stream().anyMatch("gzip"::equalsIgnoreCase);
     }
 
-    public static boolean isDeflate(Map<String, List<String>> headers) {
+    private static boolean isDeflate(Map<String, List<String>> headers) {
         return getHeaderList(headers, Header.CONTENT_ENCODING.getValue()).stream().anyMatch("deflate"::equalsIgnoreCase);
     }
 
@@ -727,9 +744,94 @@ public class NetworkUtils {
     }
 
     /**
+     * 使用 Spring {@link WebClient} 客户端发起 HTTP 请求
+     *
+     * @param hre 请求实体
+     * @return 响应字符串内容
+     */
+    private static String webClientRequest(HttpRequestEntity hre) {
+        String requestUrl = hre.getRequestUrl();
+        HttpMethod httpMethod = hre.getHttpMethod();
+        infoLog("请求的URL ====> {}, 请求方式 -> [{}], 请求时间戳 -> {}", requestUrl, httpMethod, hre.getEpoch());
+        Map<String, String> requestBody = hre.getRequestBody();
+        Map<String, String> requestHeaders = hre.getRequestHeaders();
+
+        reactor.netty.http.client.HttpClient httpClient = reactor.netty.http.client.HttpClient.create()
+                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, hre.getConnectTimeout())
+                .responseTimeout(Duration.ofMillis(hre.getRequestTimeout()));
+        if (StringUtils.isNotEmpty(hre.getProxyHost())) {
+            httpClient = httpClient.proxy(spec -> spec.type(ProxyProvider.Proxy.HTTP)
+                    .host(hre.getProxyHost())
+                    .port(hre.getProxyPort()));
+            infoLog("已启用代理服务器 ====> {}", hre.getProxyHost() + StringPool.COLON + hre.getProxyPort());
+        }
+        WebClient webClient = WebClient.builder()
+                .clientConnector(new ReactorClientHttpConnector(httpClient))
+                .build();
+
+        WebClient.RequestBodyUriSpec requestSpec = webClient.method(httpMethod);
+        requestSpec.uri(requestUrl);
+
+        org.springframework.http.HttpHeaders headers = new org.springframework.http.HttpHeaders();
+        if (requestHeaders != null) {
+            requestHeaders.forEach(headers::add);
+        }
+
+        if (isRequestBodyAllowedHttpMethod(httpMethod)) {
+            String contentType = headers.getFirst(Header.CONTENT_TYPE.getValue());
+            if (contentType == null) {
+                contentType = MimeTypeUtils.APPLICATION_JSON_VALUE;
+            }
+            org.springframework.http.MediaType mediaType = org.springframework.http.MediaType.parseMediaType(contentType);
+            headers.setContentType(mediaType);
+            if (ContentType.FORM_URLENCODED.getValue().equals(contentType)) {
+                LinkedMultiValueMap<String, String> formData = new LinkedMultiValueMap<>();
+                if (requestBody != null) {
+                    requestBody.forEach(formData::add);
+                }
+                infoBodyLog(StringConvert.prettyJson(formData.toSingleValueMap()));
+                requestSpec.body(BodyInserters.fromFormData(formData));
+            } else if (ContentType.MULTIPART.getValue().equals(contentType)) {
+                LinkedMultiValueMap<String, Object> multipartData = new LinkedMultiValueMap<>();
+                if (requestBody != null) {
+                    requestBody.forEach(multipartData::add);
+                }
+                infoBodyLog(StringConvert.prettyJson(multipartData.toSingleValueMap()));
+                requestSpec.body(BodyInserters.fromMultipartData(multipartData));
+            } else {
+                String body = requestBody == null ? Symbol.EMPTY_JSON
+                        : mergeRequestBodyIfNecesaryToString(requestBody, hre.getComplexBody());
+                infoBodyLog(StringConvert.prettyJson(body));
+                requestSpec.body(BodyInserters.fromValue(body));
+            }
+        } else {
+            infoBodyLog(StringConvert.prettyJson(Symbol.EMPTY));
+        }
+        requestSpec.headers(httpHeaders -> httpHeaders.addAll(headers));
+        infoHeadersLog(StringConvert.prettyJson(headers.toSingleValueMap()));
+
+        try {
+            ResponseEntity<String> response = requestSpec.retrieve().toEntity(String.class).block();
+            if (response != null) {
+                infoResponseHeaderLog(StringConvert.prettyJson(response.getHeaders().toSingleValueMap()));
+                infoResponseLog(response.getStatusCode(), StringConvert.prettyJson(response.getBody()));
+                return response.getBody();
+            }
+        } catch (WebClientResponseException e) {
+            org.springframework.http.HttpHeaders responseHeaders = e.getHeaders();
+            infoResponseHeaderLog(StringConvert.prettyJson(responseHeaders.toSingleValueMap()));
+            log.error("请求失败, 状态码为 ===> {}, 响应体 ===> {}", e.getRawStatusCode(),
+                    StringConvert.prettyJson(e.getResponseBodyAsString()), e);
+        } catch (Exception e) {
+            logError(e);
+        }
+        return StringUtils.EMPTY;
+    }
+
+    /**
      * 使用 JDK 11 {@link java.net.http.HttpClient} 发起 HTTP 请求
      */
-    public static String httpClientRequest(HttpRequestEntity hre) {
+    private static String httpClientRequest(HttpRequestEntity hre) {
         URI uri = URI.create(hre.getRequestUrl());
         String httpMethod = hre.getHttpMethod().name();
         Map<String, String> requestBody = hre.getRequestBody();
@@ -865,6 +967,9 @@ public class NetworkUtils {
             case UNIREST -> {
                 return unirestRequest(hre);
             }
+            case WEBFLUX -> {
+                return webClientRequest(hre);
+            }
             default -> throw new IllegalArgumentException("Unsupported HTTP Client: " + client);
         }
     }
@@ -877,7 +982,7 @@ public class NetworkUtils {
     }
 
 
-    public static String formEntityToString(HttpEntity entity) {
+    private static String formEntityToString(HttpEntity entity) {
         try {
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             entity.writeTo(out);
@@ -889,7 +994,7 @@ public class NetworkUtils {
         }
     }
 
-    public static String formBodyToString(RequestBody formBody) {
+    private static String formBodyToString(RequestBody formBody) {
         try {
             Buffer buffer = new Buffer();
             formBody.writeTo(buffer);
@@ -900,7 +1005,7 @@ public class NetworkUtils {
         }
     }
 
-    public static String fromRequestBodyToString(Map<String, String> requestBody,
+    private static String fromRequestBodyToString(Map<String, String> requestBody,
                                                  Map<String, String> requestHeaders,
                                                  Map<String, Object> complexBody,
                                                  Charset charset,
@@ -968,27 +1073,27 @@ public class NetworkUtils {
         return StringConvert.prettyJson(rbs);
     }
 
-    public static void infoLog(String msg, Object... args) {
+    private static void infoLog(String msg, Object... args) {
         log.info(msg, args);
     }
 
-    public static void infoHeadersLog(String headers) {
+    private static void infoHeadersLog(String headers) {
         infoLog("请求头 ===> {}", headers);
     }
 
-    public static void infoBodyLog(String body) {
+    private static void infoBodyLog(String body) {
         infoLog("请求体 ===> {}", body);
     }
 
-    public static void infoResponseHeaderLog(String responseHeader) {
+    private static void infoResponseHeaderLog(String responseHeader) {
         infoLog("响应头 ===> {}", responseHeader);
     }
 
-    public static void infoResponseLog(Object status, String responseBody) {
+    private static void infoResponseLog(Object status, String responseBody) {
         log.info("请求成功, 状态信息 ===> {}, 返回的响应信息为 ===> {}", status,
                 StringConvert.prettyJson(responseBody));
     }
-    public static void logError(Exception e) {
+    private static void logError(Exception e) {
         log.error("请求失败, 错误信息为 ===> {}", e.getMessage(), e);
     }
 
@@ -1001,7 +1106,7 @@ public class NetworkUtils {
         return isRequestBodyAllowedHttpMethod(HttpMethod.valueOf(httpMethod));
     }
 
-    public static String mergeRequestBodyIfNecesaryToString(Map<String, String> requestBody,
+    private static String mergeRequestBodyIfNecesaryToString(Map<String, String> requestBody,
                                                             Map<String, Object> complexBody) {
         org.json.JSONObject jo = new org.json.JSONObject(requestBody);
         if (complexBody != null) {
