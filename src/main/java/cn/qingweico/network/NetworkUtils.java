@@ -994,7 +994,7 @@ public class NetworkUtils {
         }
     }
 
-    private static String formBodyToString(RequestBody formBody) {
+    public static String formBodyToString(RequestBody formBody) {
         try {
             Buffer buffer = new Buffer();
             formBody.writeTo(buffer);
