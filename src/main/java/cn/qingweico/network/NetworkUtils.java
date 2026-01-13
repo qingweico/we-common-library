@@ -82,9 +82,14 @@ import java.util.zip.InflaterOutputStream;
  */
 @Slf4j
 public class NetworkUtils {
-    private static final int GLOBAL_CONNECT_TIMEOUT = 5;
-    private static final int GLOBAL_READ_TIMEOUT = 10;
-    private static final int GLOBAL_REQUEST_TIMEOUT = 30;
+    /**TCP建立连接超时时间*/
+    private static final int CONNECT_TIMEOUT_MS = 5000;
+    /**等待服务器返回数据的超时(读超时)*/
+    private static final int SOCKET_TIMEOUT_MS  = 10000;
+    /**从连接池获取连接的等待时间*/
+    private static final int CONNECTION_REQUEST_TIMEOUT_MS = 30000;
+    /**整体请求超时时间(整个 HTTP Call 的总耗时上限)*/
+    private static final int CALL_TIMEOUT_MS = 30000;
     private static final int CPU = Runtime.getRuntime().availableProcessors();
     private static final Dispatcher DISPATCHER = new Dispatcher(ThreadPoolBuilder.builder()
             .corePoolSize(CPU * 2)
@@ -98,15 +103,15 @@ public class NetworkUtils {
 
     /**
      * OKHTTP 全局客户端配置
-     * 如果有统一代理,在这里配置
-     * proxy(new java.net.Proxy(java.net.Proxy.Type.HTTP, new InetSocketAddress(host, port)))
+     * 如果有统一代理, 在这里配置
+     * proxy (new java.net.Proxy(java.net.Proxy.Type.HTTP, new InetSocketAddress(host, port)))
      */
     private static final OkHttpClient OKHTTP_CLIENT = new OkHttpClient.Builder()
             .dispatcher(DISPATCHER)
             .connectionPool(CONNECTION_POOL)
-            .connectTimeout(GLOBAL_CONNECT_TIMEOUT, TimeUnit.SECONDS)
-            .readTimeout(GLOBAL_READ_TIMEOUT, TimeUnit.SECONDS)
-            .callTimeout(GLOBAL_REQUEST_TIMEOUT, TimeUnit.SECONDS)
+            .connectTimeout(CONNECT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            .readTimeout(SOCKET_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            .callTimeout(CALL_TIMEOUT_MS, TimeUnit.MILLISECONDS)
             .build();
 
 
@@ -123,9 +128,9 @@ public class NetworkUtils {
 
 
         DEFAULT_REQUEST_CONFIG = RequestConfig.custom()
-                .setConnectTimeout(GLOBAL_CONNECT_TIMEOUT * 1000)
-                .setSocketTimeout(GLOBAL_READ_TIMEOUT * 1000)
-                .setConnectionRequestTimeout(GLOBAL_REQUEST_TIMEOUT * 1000)
+                .setConnectTimeout(CONNECT_TIMEOUT_MS)
+                .setSocketTimeout(SOCKET_TIMEOUT_MS)
+                .setConnectionRequestTimeout(CONNECTION_REQUEST_TIMEOUT_MS)
                 .build();
 
         /*
@@ -991,6 +996,13 @@ public class NetworkUtils {
      * @param hre    HTTP请求实体类
      * @param client 底层发起 HTTP 请求的 Client
      * @return HTTP请求返回的内容字符串, 读取失败返回空字符串
+     * 问题优化: 其中 {@link ConversionMethod#OKHTTP} 和 {@link ConversionMethod#APACHE} 通过复用同一个客户端
+     * (复用 TCP 连接和线程池)减少性能开销, 各种超时时间和代理修改为通过全局配置(配置Client级别而非PerRequest)
+     * 其他客户端也存在同样性能问题, 暂时不做优化
+     * 高并发下请使用 {@link ConversionMethod#OKHTTP} 和 {@link ConversionMethod#APACHE} 客户端
+     * 200并发 2000 请求
+     * OKHTTP -> (优化前) Old Gen 123M 线程峰值为 1449 耗时 33220(ms) -> (优化后)  Old Gen 24M 线程峰值为 260 耗时 16493(ms)
+     * APACHE -> (优化前) Old Gen 63M 线程峰值为 218 耗时 52778(ms) -> (优化后) Old Gen 18M 线程峰值为 219 耗时 36663(ms)
      */
     public static String httpRequest(HttpRequestEntity hre, ConversionMethod client) {
         switch (client) {

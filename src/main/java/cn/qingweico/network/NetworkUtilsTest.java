@@ -17,7 +17,7 @@ import java.util.concurrent.Executors;
  * 使用 jconsole 记录 OldGen 占用、线程峰值以及耗时(吞吐量)
  *
  * @author zqw
- * @date 2022/6/25
+ * @date 2026/01/13
  */
 @Slf4j
 public class NetworkUtilsTest {
@@ -73,7 +73,3 @@ public class NetworkUtilsTest {
     }
 
 }
-// OKHTTP Old Gen 123M 1449 耗时 33220 ->  Old Gen 24M 260 耗时 16493
-
-
-// APACHE Old Gen 63M 218 耗时 52778  -> Old Gen 18M 219 耗时 36663

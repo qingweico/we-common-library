@@ -1,10 +1,13 @@
 package cn.qingweico.encrypt;
 
+import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
+import java.security.*;
+import java.security.Security;
 import java.util.Base64;
 import java.util.HashMap;
 import java.util.Map;
@@ -119,9 +122,9 @@ public class RsaDecrypt {
      * @return 解密后的明文ASCII值
      */
     public int rsaDecrypt(int cryptAscii, int pow, int divisor) {
-        //对密文ASCII值做幂运算
+        // 对密文ASCII值做幂运算
         BigDecimal powResult = BigDecimal.valueOf(cryptAscii).pow(pow);
-        //再对密运算结果对divisor取余数
+        // 再对密运算结果对divisor取余数
         BigDecimal remainder = powResult.remainder(BigDecimal.valueOf(divisor));
         return remainder.intValue();
     }
@@ -156,7 +159,7 @@ public class RsaDecrypt {
         if (privateKey == null || privateKey.isEmpty()) {
             throw new RuntimeException("privateKey is null");
         }
-        //将私钥从base64反解出来
+        // 将私钥从base64反解出来
         String string = getFromBase64(privateKey);
         String[] split = string.split(",");
         if (split.length != 2) {
@@ -198,5 +201,18 @@ public class RsaDecrypt {
             st[i] = substring;
         }
         return st;
+    }
+
+    /**
+     * 生成 RSA 密钥对
+     *
+     * @param keySize 密钥长度
+     * @return KeyPair 对象
+     */
+    public static KeyPair generateKeyPair(int keySize) throws NoSuchAlgorithmException, NoSuchProviderException {
+        Security.addProvider(new BouncyCastleProvider());
+        KeyPairGenerator keyPairGen = KeyPairGenerator.getInstance("RSA", "BC");
+        keyPairGen.initialize(keySize, new SecureRandom());
+        return keyPairGen.generateKeyPair();
     }
 }
