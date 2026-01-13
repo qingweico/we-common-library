@@ -56,7 +56,7 @@ public final class CollUtils {
      * @param value   作为结果Map中value的字段名
      * @return 转换后的Map, 不会返回null
      */
-    public Map<String, Object> listToMap(List<Map<String, Object>> retList, String key, String value) {
+    public static Map<String, Object> listToMap(List<Map<String, Object>> retList, String key, String value) {
         if (retList == null || retList.isEmpty()) {
             return new HashMap<>(0);
         }

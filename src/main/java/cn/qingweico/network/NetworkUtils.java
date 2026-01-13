@@ -6,6 +6,7 @@ import cn.hutool.http.Header;
 import cn.hutool.http.HttpUtil;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
+import cn.qingweico.concurrent.pool.ThreadPoolBuilder;
 import cn.qingweico.constants.Symbol;
 import cn.qingweico.convert.StringConvert;
 import cn.qingweico.model.HttpRequestEntity;
@@ -16,6 +17,7 @@ import cn.qingweico.network.http.HttpInvocationHandler;
 import com.google.common.io.Closeables;
 import com.google.gson.JsonParser;
 import com.google.gson.JsonSyntaxException;
+import io.netty.channel.ChannelOption;
 import jodd.util.StringPool;
 import kong.unirest.*;
 import lombok.extern.slf4j.Slf4j;
@@ -51,12 +53,13 @@ import org.apache.http.util.EntityUtils;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
+import org.springframework.http.client.reactive.ReactorClientHttpConnector;
 import org.springframework.util.*;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.reactive.function.BodyInserters;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
-import org.springframework.http.client.reactive.ReactorClientHttpConnector;
+import reactor.netty.transport.ProxyProvider;
 
 import java.io.*;
 import java.lang.reflect.Proxy;
@@ -73,15 +76,70 @@ import java.util.stream.Collectors;
 import java.util.zip.GZIPOutputStream;
 import java.util.zip.InflaterOutputStream;
 
-import io.netty.channel.ChannelOption;
-import reactor.netty.transport.ProxyProvider;
-
 /**
  * @author zqw
  * @date 2022/6/25
  */
 @Slf4j
 public class NetworkUtils {
+    private static final int GLOBAL_CONNECT_TIMEOUT = 5;
+    private static final int GLOBAL_READ_TIMEOUT = 10;
+    private static final int GLOBAL_REQUEST_TIMEOUT = 30;
+    private static final int CPU = Runtime.getRuntime().availableProcessors();
+    private static final Dispatcher DISPATCHER = new Dispatcher(ThreadPoolBuilder.builder()
+            .corePoolSize(CPU * 2)
+            .maxPoolSize(CPU * 2)
+            .threadPoolName("OKHTTP-dispatcher")
+            .build()
+    );
+
+    private static final ConnectionPool CONNECTION_POOL = new ConnectionPool(50, 5, TimeUnit.MINUTES);
+
+
+    /**
+     * OKHTTP 全局客户端配置
+     * 如果有统一代理,在这里配置
+     * proxy(new java.net.Proxy(java.net.Proxy.Type.HTTP, new InetSocketAddress(host, port)))
+     */
+    private static final OkHttpClient OKHTTP_CLIENT = new OkHttpClient.Builder()
+            .dispatcher(DISPATCHER)
+            .connectionPool(CONNECTION_POOL)
+            .connectTimeout(GLOBAL_CONNECT_TIMEOUT, TimeUnit.SECONDS)
+            .readTimeout(GLOBAL_READ_TIMEOUT, TimeUnit.SECONDS)
+            .callTimeout(GLOBAL_REQUEST_TIMEOUT, TimeUnit.SECONDS)
+            .build();
+
+
+    private static final PoolingHttpClientConnectionManager CONNECTION_MANAGER;
+    private static final CloseableHttpClient APACHE_CLIENT;
+    private static final RequestConfig DEFAULT_REQUEST_CONFIG;
+    static {
+        DISPATCHER.setMaxRequests(200);
+        DISPATCHER.setMaxRequestsPerHost(50);
+
+        CONNECTION_MANAGER = new PoolingHttpClientConnectionManager();
+        CONNECTION_MANAGER.setMaxTotal(200);
+        CONNECTION_MANAGER.setDefaultMaxPerRoute(50);
+
+
+        DEFAULT_REQUEST_CONFIG = RequestConfig.custom()
+                .setConnectTimeout(GLOBAL_CONNECT_TIMEOUT * 1000)
+                .setSocketTimeout(GLOBAL_READ_TIMEOUT * 1000)
+                .setConnectionRequestTimeout(GLOBAL_REQUEST_TIMEOUT * 1000)
+                .build();
+
+        /*
+         * Apache 全局客户端
+         * 如果有统一代理,在这里配置
+         * setProxy(new HttpHost(host, port));
+         */
+        APACHE_CLIENT = HttpClientBuilder.create()
+                .setDefaultRequestConfig(DEFAULT_REQUEST_CONFIG)
+                .setConnectionManager(CONNECTION_MANAGER)
+                .evictIdleConnections(5, TimeUnit.MINUTES)
+                .build();
+    }
+
     /**
      * 返回机器的硬件地址(通常是 MAC 地址)
      * Mac OS平台上使用 {@link InetAddress#getLocalHost()} 获取的是本地回环地址
@@ -408,7 +466,6 @@ public class NetworkUtils {
         Map<String, String> requestBody = hre.getRequestBody();
         Map<String, String> requestHeaders = hre.getRequestHeaders();
         HttpRequestBase request;
-        boolean enableProxy = false;
         infoLog("请求的URL ====> {}, 请求方式 -> [{}], 请求时间戳 -> {}", requestUrl, httpMethod, hre.getEpoch());
         if (HttpGet.METHOD_NAME.equals(httpMethod)) {
             request = new HttpGet(requestUrl);
@@ -459,26 +516,13 @@ public class NetworkUtils {
                             org.apache.http.Header::getValue));
             infoHeadersLog(StringConvert.prettyJson(requestHeaders));
         }
-        RequestConfig.Builder builder = RequestConfig.custom()
-                .setConnectTimeout(hre.getConnectTimeout())
-                .setSocketTimeout(hre.getReadTimeout())
-                .setConnectionRequestTimeout(hre.getRequestTimeout());
         if (StringUtils.isNotEmpty(hre.getProxyHost())) {
-            builder.setProxy(new HttpHost(hre.getProxyHost(), hre.getProxyPort()));
-            enableProxy = true;
+            return unsupportedPreRequestProxyWarring();
         }
-        RequestConfig requestConfig = builder.build();
-        if (enableProxy) {
-            infoLog("已启用代理服务器 ====> {}", requestConfig.getProxy());
-        }
-        PoolingHttpClientConnectionManager connectionManager = new PoolingHttpClientConnectionManager();
-        connectionManager.setMaxTotal(100);
-        connectionManager.setDefaultMaxPerRoute(20);
-        try (CloseableHttpClient httpClient = HttpClientBuilder.create()
-                .setDefaultRequestConfig(requestConfig)
-                .setConnectionManager(connectionManager)
-                .build()) {
-            CloseableHttpResponse response = httpClient.execute(request);
+
+        CloseableHttpResponse response = null;
+        try {
+            response = APACHE_CLIENT.execute(request);
             StatusLine statusLine = response.getStatusLine();
             HttpEntity httpEntity = response.getEntity();
             String result = EntityUtils.toString(httpEntity, hre.getCharset());
@@ -486,6 +530,15 @@ public class NetworkUtils {
             return result;
         } catch (IOException e) {
             log.error("请求失败, 异常信息为 ===> {}", e.getMessage(), e);
+        } finally {
+            try {
+                if (response != null) {
+                    EntityUtils.consumeQuietly(response.getEntity());
+                    response.close();
+                }
+            } catch (IOException e) {
+                log.error("{}", e.getMessage(), e);
+            }
         }
         return StringUtils.EMPTY;
     }
@@ -542,23 +595,12 @@ public class NetworkUtils {
         request = builder.build();
         Headers headers = request.headers();
         infoHeadersLog(StringConvert.prettyJson(headers.toMultimap()));
-        Dispatcher dispatcher = new Dispatcher();
-        dispatcher.setMaxRequests(10);
-        dispatcher.setMaxRequestsPerHost(5);
-        OkHttpClient.Builder clientBuilder = new OkHttpClient()
-                .newBuilder()
-                .dispatcher(dispatcher)
-                .readTimeout(hre.getReadTimeout(), TimeUnit.MILLISECONDS)
-                .connectTimeout(hre.getConnectTimeout(), TimeUnit.MILLISECONDS)
-                .callTimeout(hre.getRequestTimeout(), TimeUnit.MILLISECONDS);
 
         if (StringUtils.isNotEmpty(hre.getProxyHost())) {
-            clientBuilder.proxy(new java.net.Proxy(java.net.Proxy.Type.HTTP, new InetSocketAddress(hre.getProxyHost(), hre.getProxyPort())));
-            infoLog("已启用代理服务器 ====> {}", clientBuilder.getProxy$okhttp());
+            return unsupportedPreRequestProxyWarring();
         }
-        OkHttpClient client = clientBuilder.build();
 
-        try (Response response = client.newCall(request).execute()) {
+        try (Response response = OKHTTP_CLIENT.newCall(request).execute()) {
             if (response.isSuccessful()) {
                 ResponseBody responseBody = response.body();
                 if (responseBody != null) {
@@ -684,6 +726,9 @@ public class NetworkUtils {
 
     /**
      * 使用 {@link RestTemplate} 客户端发起 HTTP 请求
+     * RestTemplate 默认使用 {@link SimpleClientHttpRequestFactory}
+     * 其内部使用 JDK 原生的 {@link HttpURLConnection}, TCP 连接无法复用
+     * 使用 Apache {@link HttpClient} 替代
      *
      * @param hre 请求实体
      * @return 响应字符串内容
@@ -838,7 +883,7 @@ public class NetworkUtils {
         Map<String, String> requestHeaders = hre.getRequestHeaders();
         infoLog("请求的URL ====> {}, 请求方式 -> [{}], 请求时间戳 -> {}", uri, httpMethod, hre.getEpoch());
         java.net.http.HttpClient.Builder builder = java.net.http.HttpClient.newBuilder()
-                 // 用于控制建立连接的时间
+                // 用于控制建立连接的时间
                 .connectTimeout(Duration.of(hre.getConnectTimeout(), ChronoUnit.MILLIS));
         if (StringUtils.isNotEmpty(hre.getProxyHost())) {
             ProxySelector proxySelector = ProxySelector.of(new InetSocketAddress(hre.getProxyHost(), hre.getProxyPort()));
@@ -847,7 +892,7 @@ public class NetworkUtils {
         }
         java.net.http.HttpClient client = builder.build();
         java.net.http.HttpRequest.Builder requestBuilder = java.net.http.HttpRequest.newBuilder()
-                 // 用于控制整个请求的响应时间, 如果在指定的时间内没有收到响应, 请求将失败
+                // 用于控制整个请求的响应时间, 如果在指定的时间内没有收到响应, 请求将失败
                 .timeout(Duration.of(hre.getRequestTimeout(), ChronoUnit.MILLIS))
                 .version(java.net.http.HttpClient.Version.HTTP_1_1)
                 .uri(uri);
@@ -1006,10 +1051,10 @@ public class NetworkUtils {
     }
 
     private static String fromRequestBodyToString(Map<String, String> requestBody,
-                                                 Map<String, String> requestHeaders,
-                                                 Map<String, Object> complexBody,
-                                                 Charset charset,
-                                                 Consumer<org.apache.http.Header> consumer) {
+                                                  Map<String, String> requestHeaders,
+                                                  Map<String, Object> complexBody,
+                                                  Charset charset,
+                                                  Consumer<org.apache.http.Header> consumer) {
         String body;
         if (requestBody != null) {
             String contentType = requestHeaders == null ? MimeTypeUtils.APPLICATION_JSON_VALUE
@@ -1107,13 +1152,15 @@ public class NetworkUtils {
     }
 
     private static String mergeRequestBodyIfNecesaryToString(Map<String, String> requestBody,
-                                                            Map<String, Object> complexBody) {
+                                                             Map<String, Object> complexBody) {
         org.json.JSONObject jo = new org.json.JSONObject(requestBody);
         if (complexBody != null) {
             complexBody.forEach(jo::put);
         }
         return jo.toString();
     }
-
-
+    private static String unsupportedPreRequestProxyWarring() {
+        log.warn("只支持全局代理, 可以配置全局代理或者走其他客户端");
+        return StringUtils.EMPTY;
+    }
 }
