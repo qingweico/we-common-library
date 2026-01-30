@@ -28,23 +28,11 @@ public class HttpRequestEntity {
     Map<String, String> requestBody;
     /*复杂对象请求体*/
     Map<String, Object> complexBody;
-    /*代理域名*/
-    private String proxyHost;
-    /*代理端口*/
-    private int proxyPort;
-    /*连接超时时间(ms)*/
-    @Builder.Default
-    private int connectTimeout = 3000;
-    /*读取超时时间(ms)*/
-    @Builder.Default
-    private int readTimeout = 5000;
-    /*请求超时时间(ms)*/
-    @Builder.Default
-    private int requestTimeout = 10000;
+    /*请求元数据*/
+    private RequestMeta meta;
+    /*请求级配置*/
+    private RequestConfigOptions requestConfigOptions;
     /*字符集*/
     @Builder.Default
     private Charset charset = StandardCharsets.UTF_8;
-    @Builder.Default
-    /*请求时间戳*/
-    private long epoch = System.currentTimeMillis();
 }

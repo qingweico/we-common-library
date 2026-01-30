@@ -70,6 +70,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
@@ -91,36 +92,45 @@ public class NetworkUtils {
     /**整体请求超时时间(整个 HTTP Call 的总耗时上限)*/
     private static final int CALL_TIMEOUT_MS = 30000;
     private static final int CPU = Runtime.getRuntime().availableProcessors();
-    private static final Dispatcher DISPATCHER = new Dispatcher(ThreadPoolBuilder.builder()
-            .corePoolSize(CPU * 2)
-            .maxPoolSize(CPU * 2)
-            .threadPoolName("OKHTTP-dispatcher")
-            .build()
-    );
+    private static final Dispatcher DISPATCHER;
 
     private static final ConnectionPool CONNECTION_POOL = new ConnectionPool(50, 5, TimeUnit.MINUTES);
 
-
     /**
      * OKHTTP 全局客户端配置
-     * 如果有统一代理, 在这里配置
-     * proxy (new java.net.Proxy(java.net.Proxy.Type.HTTP, new InetSocketAddress(host, port)))
+     * 如果需要配置代理或者想覆盖掉全局超时时间配置, 可以使用 {@link OkHttpClient#newBuilder()}
+     * 基于原 Client 派生一个新 Client, 这是官方推荐的做法 { <a href="https://square.github.io/okhttp/recipes/#per-call-configuration-kt-java">per-call-configuration-kt-java</a> }
      */
-    private static final OkHttpClient OKHTTP_CLIENT = new OkHttpClient.Builder()
-            .dispatcher(DISPATCHER)
-            .connectionPool(CONNECTION_POOL)
-            .connectTimeout(CONNECT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-            .readTimeout(SOCKET_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-            .callTimeout(CALL_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-            .build();
+    private static final OkHttpClient OKHTTP_CLIENT;
 
 
     private static final PoolingHttpClientConnectionManager CONNECTION_MANAGER;
+
+    /**
+     * Apache 全局客户端
+     * 配置 per-call-configuration 不同于 OKHTTP 派生出一个新的 Client, 可以通过
+     * {@link HttpRequestBase#setConfig(RequestConfig)} 进行覆盖,
+     * 即支持 per-request RequestConfig
+     */
     private static final CloseableHttpClient APACHE_CLIENT;
     private static final RequestConfig DEFAULT_REQUEST_CONFIG;
     static {
+        DISPATCHER = new Dispatcher(ThreadPoolBuilder
+                .builder()
+                .corePoolSize(CPU * 2)
+                .maxPoolSize(CPU * 2)
+                .threadPoolName("OKHTTP-dispatcher")
+                .build());
         DISPATCHER.setMaxRequests(200);
         DISPATCHER.setMaxRequestsPerHost(50);
+
+        OKHTTP_CLIENT = new OkHttpClient.Builder()
+                .dispatcher(DISPATCHER)
+                .connectionPool(CONNECTION_POOL)
+                .connectTimeout(CONNECT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+                .readTimeout(SOCKET_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+                .callTimeout(CALL_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+                .build();
 
         CONNECTION_MANAGER = new PoolingHttpClientConnectionManager();
         CONNECTION_MANAGER.setMaxTotal(200);
@@ -133,11 +143,6 @@ public class NetworkUtils {
                 .setConnectionRequestTimeout(CONNECTION_REQUEST_TIMEOUT_MS)
                 .build();
 
-        /*
-         * Apache 全局客户端
-         * 如果有统一代理,在这里配置
-         * setProxy(new HttpHost(host, port));
-         */
         APACHE_CLIENT = HttpClientBuilder.create()
                 .setDefaultRequestConfig(DEFAULT_REQUEST_CONFIG)
                 .setConnectionManager(CONNECTION_MANAGER)
@@ -403,8 +408,11 @@ public class NetworkUtils {
             HttpClientBuilder builder = HttpClients.custom()
                     .setRedirectStrategy(new LaxRedirectStrategy());
             //.disableRedirectHandling()
-            if (StringUtils.isNotEmpty(hre.getProxyHost())) {
-                builder.setProxy(new HttpHost(hre.getProxyHost(), hre.getProxyPort()));
+            if (hre.getRequestConfigOptions() != null) {
+                RequestConfigOptions config = hre.getRequestConfigOptions();
+                if (StringUtils.isNotEmpty(config.getProxyHost())) {
+                    builder.setProxy(new HttpHost(config.getProxyHost(), config.getProxyPort()));
+                }
             }
             client = builder.build();
             HttpGet request = new HttpGet(url);
@@ -471,7 +479,7 @@ public class NetworkUtils {
         Map<String, String> requestBody = hre.getRequestBody();
         Map<String, String> requestHeaders = hre.getRequestHeaders();
         HttpRequestBase request;
-        infoLog("请求的URL ====> {}, 请求方式 -> [{}], 请求时间戳 -> {}", requestUrl, httpMethod, hre.getEpoch());
+        infoLog("请求的URL ====> {}, 请求方式 -> [{}]", requestUrl, httpMethod);
         if (HttpGet.METHOD_NAME.equals(httpMethod)) {
             request = new HttpGet(requestUrl);
         } else if (HttpPost.METHOD_NAME.equals(httpMethod)) {
@@ -521,10 +529,26 @@ public class NetworkUtils {
                             org.apache.http.Header::getValue));
             infoHeadersLog(StringConvert.prettyJson(requestHeaders));
         }
-        if (StringUtils.isNotEmpty(hre.getProxyHost())) {
-            return unsupportedPreRequestProxyWarring();
-        }
+        RequestConfig.Builder rcb = RequestConfig.custom();
 
+        if (hre.getRequestConfigOptions() != null) {
+            RequestConfigOptions config = hre.getRequestConfigOptions();
+            if (StringUtils.isNotEmpty(config.getProxyHost())) {
+                rcb.setProxy(new HttpHost(config.getProxyHost(), config.getProxyPort()));
+            }
+            if (config.getConnectTimeout() != null) {
+                rcb.setConnectionRequestTimeout(config.getConnectTimeout());
+            }
+            if (config.getSocketTimeout() != null) {
+                rcb.setSocketTimeout(config.getSocketTimeout());
+            }
+            if (config.getConnectionRequestTimeout() != null) {
+                rcb.setConnectionRequestTimeout(config.getConnectionRequestTimeout());
+            }
+        }
+        // 请求级别的代理、超时时间等配置, 如果有会覆盖掉全局配置
+        RequestConfig requestConfig = rcb.build();
+        request.setConfig(requestConfig);
         CloseableHttpResponse response = null;
         try {
             response = APACHE_CLIENT.execute(request);
@@ -557,7 +581,7 @@ public class NetworkUtils {
         String httpMethod = hre.getHttpMethod().name();
         Map<String, String> requestBody = hre.getRequestBody();
         Map<String, String> requestHeaders = hre.getRequestHeaders();
-        infoLog("请求的URL ====> {}, 请求方式 -> [{}], 请求时间戳 -> {}", requestUrl, httpMethod, hre.getEpoch());
+        infoLog("请求的URL ====> {}, 请求方式 -> [{}]", requestUrl, httpMethod);
         Request.Builder builder = new Request.Builder().url(requestUrl);
         if (httpMethod.equals(HttpMethod.GET.name())) {
             builder.get();
@@ -600,12 +624,28 @@ public class NetworkUtils {
         request = builder.build();
         Headers headers = request.headers();
         infoHeadersLog(StringConvert.prettyJson(headers.toMultimap()));
+        OkHttpClient client = OKHTTP_CLIENT;
 
-        if (StringUtils.isNotEmpty(hre.getProxyHost())) {
-            return unsupportedPreRequestProxyWarring();
+        RequestConfigOptions requestConfigOptions = hre.getRequestConfigOptions();
+        if (requestConfigOptions != null) {
+            OkHttpClient.Builder newBuilder = client.newBuilder();
+            if (StringUtils.isNotEmpty(requestConfigOptions.getProxyHost())) {
+                newBuilder.proxy(new java.net.Proxy(java.net.Proxy.Type.HTTP,
+                        new InetSocketAddress(requestConfigOptions.getProxyHost(), requestConfigOptions.getProxyPort())));
+            }
+            if (requestConfigOptions.getConnectTimeout() != null) {
+                newBuilder.connectTimeout(requestConfigOptions.getConnectTimeout(), TimeUnit.MILLISECONDS);
+            }
+            if (requestConfigOptions.getSocketTimeout() != null) {
+                newBuilder.readTimeout(requestConfigOptions.getSocketTimeout(), TimeUnit.MILLISECONDS);
+            }
+            if (requestConfigOptions.getCallTimeout() != null) {
+                newBuilder.callTimeout(requestConfigOptions.getCallTimeout(), TimeUnit.MILLISECONDS);
+            }
+            client = newBuilder.build();
         }
 
-        try (Response response = OKHTTP_CLIENT.newCall(request).execute()) {
+        try (Response response = client.newCall(request).execute()) {
             if (response.isSuccessful()) {
                 ResponseBody responseBody = response.body();
                 if (responseBody != null) {
@@ -634,7 +674,7 @@ public class NetworkUtils {
             Map<String, String> requestBody = hre.getRequestBody();
             int connectTimeout = hre.getConnectTimeout();
             int readTimeout = hre.getReadTimeout();
-            infoLog("请求的URL ====> {}, 请求方式 -> [{}], 请求时间戳 -> {}", requestUrl, httpMethod, hre.getEpoch());
+            infoLog("请求的URL ====> {}, 请求方式 -> [{}]", requestUrl, httpMethod);
             URL url = new URL(requestUrl);
             System.setProperty("sun.net.http.allowRestrictedHeaders", "true");
             if (StringUtils.isNotEmpty(hre.getProxyHost())) {
@@ -743,7 +783,7 @@ public class NetworkUtils {
         HttpMethod httpMethod = hre.getHttpMethod();
         Map<String, String> requestBody = hre.getRequestBody();
         Map<String, String> requestHeaders = hre.getRequestHeaders();
-        infoLog("请求的URL ====> {}, 请求方式 -> [{}], 请求时间戳 -> {}", requestUrl, httpMethod, hre.getEpoch());
+        infoLog("请求的URL ====> {}, 请求方式 -> [{}]", requestUrl, httpMethod);
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout(hre.getConnectTimeout());
         factory.setReadTimeout(hre.getReadTimeout());
@@ -802,7 +842,7 @@ public class NetworkUtils {
     private static String webClientRequest(HttpRequestEntity hre) {
         String requestUrl = hre.getRequestUrl();
         HttpMethod httpMethod = hre.getHttpMethod();
-        infoLog("请求的URL ====> {}, 请求方式 -> [{}], 请求时间戳 -> {}", requestUrl, httpMethod, hre.getEpoch());
+        infoLog("请求的URL ====> {}, 请求方式 -> [{}]", requestUrl, httpMethod);
         Map<String, String> requestBody = hre.getRequestBody();
         Map<String, String> requestHeaders = hre.getRequestHeaders();
 
@@ -886,7 +926,7 @@ public class NetworkUtils {
         String httpMethod = hre.getHttpMethod().name();
         Map<String, String> requestBody = hre.getRequestBody();
         Map<String, String> requestHeaders = hre.getRequestHeaders();
-        infoLog("请求的URL ====> {}, 请求方式 -> [{}], 请求时间戳 -> {}", uri, httpMethod, hre.getEpoch());
+        infoLog("请求的URL ====> {}, 请求方式 -> [{}]", uri, httpMethod);
         java.net.http.HttpClient.Builder builder = java.net.http.HttpClient.newBuilder()
                 // 用于控制建立连接的时间
                 .connectTimeout(Duration.of(hre.getConnectTimeout(), ChronoUnit.MILLIS));
@@ -934,7 +974,7 @@ public class NetworkUtils {
     private static String unirestRequest(HttpRequestEntity hre) {
         String requestUrl = hre.getRequestUrl();
         String httpMethod = hre.getHttpMethod().name();
-        infoLog("请求的URL ====> {}, 请求方式 -> [{}], 请求时间戳 -> {}", requestUrl, httpMethod, hre.getEpoch());
+        infoLog("请求的URL ====> {}, 请求方式 -> [{}]", requestUrl, httpMethod);
         Config config = Unirest.config();
         if (StringUtils.isNotEmpty(hre.getProxyHost())) {
             kong.unirest.Proxy proxy = new kong.unirest.Proxy(hre.getProxyHost(), hre.getProxyPort());
@@ -997,8 +1037,7 @@ public class NetworkUtils {
      * @param client 底层发起 HTTP 请求的 Client
      * @return HTTP请求返回的内容字符串, 读取失败返回空字符串
      * 问题优化: 其中 {@link ConversionMethod#OKHTTP} 和 {@link ConversionMethod#APACHE} 通过复用同一个客户端
-     * (复用 TCP 连接和线程池)减少性能开销, 各种超时时间和代理修改为通过全局配置(配置Client级别而非PerRequest)
-     * 其他客户端也存在同样性能问题, 暂时不做优化
+     * (复用 TCP 连接和线程池)减少性能开销, 其他客户端也存在同样性能问题, 暂时不做优化
      * 高并发下请使用 {@link ConversionMethod#OKHTTP} 和 {@link ConversionMethod#APACHE} 客户端
      * 200并发 2000 请求
      * OKHTTP -> (优化前) Old Gen 123M 线程峰值为 1449 耗时 33220(ms) -> (优化后)  Old Gen 24M 线程峰值为 260 耗时 16493(ms)
@@ -1170,9 +1209,5 @@ public class NetworkUtils {
             complexBody.forEach(jo::put);
         }
         return jo.toString();
-    }
-    private static String unsupportedPreRequestProxyWarring() {
-        log.warn("只支持全局代理, 可以配置全局代理或者走其他客户端");
-        return StringUtils.EMPTY;
     }
 }

@@ -5,7 +5,7 @@ import lombok.Getter;
 import org.apache.http.client.config.RequestConfig;
 
 /**
- * property source {@link RequestConfig}
+ * per-call-configuration
  *
  * @author zqw
  * @date 2025/8/2
@@ -13,13 +13,28 @@ import org.apache.http.client.config.RequestConfig;
 @Builder
 @Getter
 public class RequestConfigOptions {
-    // 连接超时时间(ms)
-    @Builder.Default
-    private int connectTimeout = -1;
-    // 连接请求超时时间(ms)
-    @Builder.Default
-    private int connectionRequestTimeout = -1;
-    // socket 读写超时时间(ms)
-    @Builder.Default
-    private int socketTimeout = -1;
+    /**
+     * 代理域名
+     */
+    private String proxyHost;
+    /**
+     * 代理端口
+     */
+    private int proxyPort;
+    /**
+     * TCP建立连接超时时间
+     */
+    private Integer connectTimeout;
+    /**
+     * 从连接池中获取连接时允许等待的最长时间
+     */
+    private Integer connectionRequestTimeout;
+    /**
+     * 等待服务器返回数据的最大时间(等价于读超时/readTimeout)
+     */
+    private Integer socketTimeout;
+    /**
+     * 整体请求超时时间(整个 HTTP Call 的总耗时上限)
+     */
+    private Integer callTimeout;
 }
