@@ -1,6 +1,6 @@
 package cn.qingweico.network;
 
-import cn.qingweico.convert.ByteUnitConverter;
+import cn.qingweico.convert.TimeUnitConverter;
 import cn.qingweico.model.HttpRequestEntity;
 import cn.qingweico.model.enums.ConversionMethod;
 import lombok.extern.slf4j.Slf4j;
@@ -50,7 +50,7 @@ public class NetworkUtilsTest {
             }
 
             latch.await();
-            System.out.println("耗时(ms): " + ByteUnitConverter.convert(System.currentTimeMillis() - start));
+            System.out.println("耗时(ms): " + TimeUnitConverter.convertMills(System.currentTimeMillis() - start));
             pool.shutdown();
         }
 
@@ -66,9 +66,9 @@ public class NetworkUtilsTest {
                 .requestUrl("https://httpbin.org/post")
                 .httpMethod(HttpMethod.POST)
                 .requestBody(Map.of("a", "1", "b", "2"))
-                .connectTimeout(100000)
-                .readTimeout(100000)
-                .requestTimeout(100000)
+                .connectTimeoutMillis(100000)
+                .socketTimeoutMillis(100000)
+                .callTimeoutMillis(100000)
                 .build();
     }
 

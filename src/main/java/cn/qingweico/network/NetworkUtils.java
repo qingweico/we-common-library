@@ -11,7 +11,7 @@ import cn.qingweico.constants.Symbol;
 import cn.qingweico.convert.StringConvert;
 import cn.qingweico.model.HttpRequestEntity;
 import cn.qingweico.model.Poem;
-import cn.qingweico.model.RequestConfigOptions;
+import cn.qingweico.model.TimeoutDefaults;
 import cn.qingweico.model.enums.ConversionMethod;
 import cn.qingweico.network.http.HttpInvocationHandler;
 import com.google.common.io.Closeables;
@@ -70,7 +70,6 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
-import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
@@ -83,14 +82,6 @@ import java.util.zip.InflaterOutputStream;
  */
 @Slf4j
 public class NetworkUtils {
-    /**TCP建立连接超时时间*/
-    private static final int CONNECT_TIMEOUT_MS = 5000;
-    /**等待服务器返回数据的超时(读超时)*/
-    private static final int SOCKET_TIMEOUT_MS  = 10000;
-    /**从连接池获取连接的等待时间*/
-    private static final int CONNECTION_REQUEST_TIMEOUT_MS = 30000;
-    /**整体请求超时时间(整个 HTTP Call 的总耗时上限)*/
-    private static final int CALL_TIMEOUT_MS = 30000;
     private static final int CPU = Runtime.getRuntime().availableProcessors();
     private static final Dispatcher DISPATCHER;
 
@@ -127,9 +118,9 @@ public class NetworkUtils {
         OKHTTP_CLIENT = new OkHttpClient.Builder()
                 .dispatcher(DISPATCHER)
                 .connectionPool(CONNECTION_POOL)
-                .connectTimeout(CONNECT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-                .readTimeout(SOCKET_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-                .callTimeout(CALL_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+                .connectTimeout(TimeoutDefaults.CONNECT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+                .readTimeout(TimeoutDefaults.SOCKET_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+                .callTimeout(TimeoutDefaults.CALL_TIMEOUT_MS, TimeUnit.MILLISECONDS)
                 .build();
 
         CONNECTION_MANAGER = new PoolingHttpClientConnectionManager();
@@ -138,9 +129,9 @@ public class NetworkUtils {
 
 
         DEFAULT_REQUEST_CONFIG = RequestConfig.custom()
-                .setConnectTimeout(CONNECT_TIMEOUT_MS)
-                .setSocketTimeout(SOCKET_TIMEOUT_MS)
-                .setConnectionRequestTimeout(CONNECTION_REQUEST_TIMEOUT_MS)
+                .setConnectTimeout(TimeoutDefaults.CONNECT_TIMEOUT_MS)
+                .setSocketTimeout(TimeoutDefaults.SOCKET_TIMEOUT_MS)
+                .setConnectionRequestTimeout(TimeoutDefaults.CONNECTION_REQUEST_TIMEOUT_MS)
                 .build();
 
         APACHE_CLIENT = HttpClientBuilder.create()
@@ -365,24 +356,24 @@ public class NetworkUtils {
      * @throws IOException 发生网络异常、连接超时或响应解析失败时抛出
      */
     public static String sendProxyPost(String url, Map<String, Object> body) throws IOException {
-        RequestConfigOptions options = RequestConfigOptions.builder()
-                .connectTimeout(2000)
-                .connectionRequestTimeout(3000)
-                .socketTimeout(5000)
+        HttpRequestEntity entity = HttpRequestEntity.builder()
+                .connectTimeoutMillis(2000)
+                .connectionRequestTimeoutMillis(3000)
+                .socketTimeoutMillis(5000)
                 .build();
-        return sendProxyPost(url, body, options);
+        return sendProxyPost(url, body, entity);
     }
 
-    public static String sendProxyPost(String url, Map<String, Object> body, RequestConfigOptions options) throws IOException {
+    public static String sendProxyPost(String url, Map<String, Object> body, HttpRequestEntity entity) throws IOException {
         Assert.hasLength(url, "URL不能为空");
         StringEntity stringEntity = new StringEntity(JSONUtil.parse(body).toJSONString(0), StandardCharsets.UTF_8);
         stringEntity.setContentType(ContentType.JSON.getValue());
         HttpPost httpPost = new HttpPost(url);
         httpPost.setEntity(stringEntity);
         RequestConfig requestConfig = RequestConfig.custom()
-                .setConnectTimeout(options.getConnectTimeout())
-                .setConnectionRequestTimeout(options.getConnectionRequestTimeout())
-                .setSocketTimeout(options.getSocketTimeout())
+                .setConnectTimeout(entity.getConnectTimeoutMillis())
+                .setConnectionRequestTimeout(entity.getConnectionRequestTimeoutMillis())
+                .setSocketTimeout(entity.getSocketTimeoutMillis())
                 .build();
         CloseableHttpClient httpClient = HttpClientBuilder.create()
                 .addInterceptorFirst((HttpRequestInterceptor) (request, context) -> {
@@ -408,11 +399,8 @@ public class NetworkUtils {
             HttpClientBuilder builder = HttpClients.custom()
                     .setRedirectStrategy(new LaxRedirectStrategy());
             //.disableRedirectHandling()
-            if (hre.getRequestConfigOptions() != null) {
-                RequestConfigOptions config = hre.getRequestConfigOptions();
-                if (StringUtils.isNotEmpty(config.getProxyHost())) {
-                    builder.setProxy(new HttpHost(config.getProxyHost(), config.getProxyPort()));
-                }
+            if (StringUtils.isNotEmpty(hre.getProxyHost())) {
+                builder.setProxy(new HttpHost(hre.getProxyHost(), hre.getProxyPort()));
             }
             client = builder.build();
             HttpGet request = new HttpGet(url);
@@ -531,20 +519,17 @@ public class NetworkUtils {
         }
         RequestConfig.Builder rcb = RequestConfig.custom();
 
-        if (hre.getRequestConfigOptions() != null) {
-            RequestConfigOptions config = hre.getRequestConfigOptions();
-            if (StringUtils.isNotEmpty(config.getProxyHost())) {
-                rcb.setProxy(new HttpHost(config.getProxyHost(), config.getProxyPort()));
-            }
-            if (config.getConnectTimeout() != null) {
-                rcb.setConnectionRequestTimeout(config.getConnectTimeout());
-            }
-            if (config.getSocketTimeout() != null) {
-                rcb.setSocketTimeout(config.getSocketTimeout());
-            }
-            if (config.getConnectionRequestTimeout() != null) {
-                rcb.setConnectionRequestTimeout(config.getConnectionRequestTimeout());
-            }
+        if (StringUtils.isNotEmpty(hre.getProxyHost())) {
+            rcb.setProxy(new HttpHost(hre.getProxyHost(), hre.getProxyPort()));
+        }
+        if (hre.getConnectTimeoutMillis() != null) {
+            rcb.setConnectionRequestTimeout(hre.getConnectTimeoutMillis());
+        }
+        if (hre.getSocketTimeoutMillis() != null) {
+            rcb.setSocketTimeout(hre.getSocketTimeoutMillis());
+        }
+        if (hre.getConnectionRequestTimeoutMillis() != null) {
+            rcb.setConnectionRequestTimeout(hre.getConnectionRequestTimeoutMillis());
         }
         // 请求级别的代理、超时时间等配置, 如果有会覆盖掉全局配置
         RequestConfig requestConfig = rcb.build();
@@ -626,21 +611,27 @@ public class NetworkUtils {
         infoHeadersLog(StringConvert.prettyJson(headers.toMultimap()));
         OkHttpClient client = OKHTTP_CLIENT;
 
-        RequestConfigOptions requestConfigOptions = hre.getRequestConfigOptions();
-        if (requestConfigOptions != null) {
+        /*是否存在per-call-configuration, 如果需要则派生出一个新的 Client*/
+        boolean perCallConfiguration =
+                StringUtils.isNotEmpty(hre.getProxyHost()) ||
+                        hre.getConnectTimeoutMillis() != null ||
+                        hre.getSocketTimeoutMillis() != null ||
+                        hre.getCallTimeoutMillis() != null;
+
+        if (perCallConfiguration) {
             OkHttpClient.Builder newBuilder = client.newBuilder();
-            if (StringUtils.isNotEmpty(requestConfigOptions.getProxyHost())) {
+            if (StringUtils.isNotEmpty(hre.getProxyHost())) {
                 newBuilder.proxy(new java.net.Proxy(java.net.Proxy.Type.HTTP,
-                        new InetSocketAddress(requestConfigOptions.getProxyHost(), requestConfigOptions.getProxyPort())));
+                        new InetSocketAddress(hre.getProxyHost(), hre.getProxyPort())));
             }
-            if (requestConfigOptions.getConnectTimeout() != null) {
-                newBuilder.connectTimeout(requestConfigOptions.getConnectTimeout(), TimeUnit.MILLISECONDS);
+            if (hre.getConnectTimeoutMillis() != null) {
+                newBuilder.connectTimeout(hre.getConnectTimeoutMillis(), TimeUnit.MILLISECONDS);
             }
-            if (requestConfigOptions.getSocketTimeout() != null) {
-                newBuilder.readTimeout(requestConfigOptions.getSocketTimeout(), TimeUnit.MILLISECONDS);
+            if (hre.getSocketTimeoutMillis() != null) {
+                newBuilder.readTimeout(hre.getSocketTimeoutMillis(), TimeUnit.MILLISECONDS);
             }
-            if (requestConfigOptions.getCallTimeout() != null) {
-                newBuilder.callTimeout(requestConfigOptions.getCallTimeout(), TimeUnit.MILLISECONDS);
+            if (hre.getCallTimeoutMillis() != null) {
+                newBuilder.callTimeout(hre.getCallTimeoutMillis(), TimeUnit.MILLISECONDS);
             }
             client = newBuilder.build();
         }
@@ -672,8 +663,6 @@ public class NetworkUtils {
             String httpMethod = hre.getHttpMethod().name();
             Map<String, String> requestHeaders = hre.getRequestHeaders();
             Map<String, String> requestBody = hre.getRequestBody();
-            int connectTimeout = hre.getConnectTimeout();
-            int readTimeout = hre.getReadTimeout();
             infoLog("请求的URL ====> {}, 请求方式 -> [{}]", requestUrl, httpMethod);
             URL url = new URL(requestUrl);
             System.setProperty("sun.net.http.allowRestrictedHeaders", "true");
@@ -689,8 +678,9 @@ public class NetworkUtils {
                 // 向 HTTP 请求中添加请求头
                 requestHeaders.forEach(connection::addRequestProperty);
             }
-            connection.setConnectTimeout(connectTimeout);
-            connection.setReadTimeout(readTimeout);
+            ResolvedTimeouts rt = ResolvedTimeouts.resolve(hre);
+            connection.setConnectTimeout(rt.connectTimeoutMillis());
+            connection.setReadTimeout(rt.socketTimeoutMillis());
             // 手动处理重定向
             connection.setInstanceFollowRedirects(false);
 
@@ -785,8 +775,9 @@ public class NetworkUtils {
         Map<String, String> requestHeaders = hre.getRequestHeaders();
         infoLog("请求的URL ====> {}, 请求方式 -> [{}]", requestUrl, httpMethod);
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
-        factory.setConnectTimeout(hre.getConnectTimeout());
-        factory.setReadTimeout(hre.getReadTimeout());
+        ResolvedTimeouts rt = ResolvedTimeouts.resolve(hre);
+        factory.setConnectTimeout(rt.connectTimeoutMillis());
+        factory.setReadTimeout(rt.socketTimeoutMillis());
         if (StringUtils.isNotEmpty(hre.getProxyHost())) {
             java.net.Proxy proxy = new java.net.Proxy(java.net.Proxy.Type.HTTP, new InetSocketAddress(hre.getProxyHost(), hre.getProxyPort()));
             factory.setProxy(proxy);
@@ -845,10 +836,10 @@ public class NetworkUtils {
         infoLog("请求的URL ====> {}, 请求方式 -> [{}]", requestUrl, httpMethod);
         Map<String, String> requestBody = hre.getRequestBody();
         Map<String, String> requestHeaders = hre.getRequestHeaders();
-
+        ResolvedTimeouts rt = ResolvedTimeouts.resolve(hre);
         reactor.netty.http.client.HttpClient httpClient = reactor.netty.http.client.HttpClient.create()
-                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, hre.getConnectTimeout())
-                .responseTimeout(Duration.ofMillis(hre.getRequestTimeout()));
+                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, rt.connectTimeoutMillis())
+                .responseTimeout(Duration.ofMillis(rt.callTimeoutMillis()));
         if (StringUtils.isNotEmpty(hre.getProxyHost())) {
             httpClient = httpClient.proxy(spec -> spec.type(ProxyProvider.Proxy.HTTP)
                     .host(hre.getProxyHost())
@@ -927,9 +918,10 @@ public class NetworkUtils {
         Map<String, String> requestBody = hre.getRequestBody();
         Map<String, String> requestHeaders = hre.getRequestHeaders();
         infoLog("请求的URL ====> {}, 请求方式 -> [{}]", uri, httpMethod);
+        ResolvedTimeouts rt = ResolvedTimeouts.resolve(hre);
         java.net.http.HttpClient.Builder builder = java.net.http.HttpClient.newBuilder()
                 // 用于控制建立连接的时间
-                .connectTimeout(Duration.of(hre.getConnectTimeout(), ChronoUnit.MILLIS));
+                .connectTimeout(Duration.of(rt.connectTimeoutMillis(), ChronoUnit.MILLIS));
         if (StringUtils.isNotEmpty(hre.getProxyHost())) {
             ProxySelector proxySelector = ProxySelector.of(new InetSocketAddress(hre.getProxyHost(), hre.getProxyPort()));
             builder.proxy(proxySelector);
@@ -938,7 +930,7 @@ public class NetworkUtils {
         java.net.http.HttpClient client = builder.build();
         java.net.http.HttpRequest.Builder requestBuilder = java.net.http.HttpRequest.newBuilder()
                 // 用于控制整个请求的响应时间, 如果在指定的时间内没有收到响应, 请求将失败
-                .timeout(Duration.of(hre.getRequestTimeout(), ChronoUnit.MILLIS))
+                .timeout(Duration.of(rt.callTimeoutMillis(), ChronoUnit.MILLIS))
                 .version(java.net.http.HttpClient.Version.HTTP_1_1)
                 .uri(uri);
         if (requestHeaders != null) {
@@ -981,8 +973,9 @@ public class NetworkUtils {
             config.proxy(proxy);
             infoLog("已启用代理服务器 ====> {}", proxy.getHost() + StringPool.COLON + proxy.getPort());
         }
-        config.socketTimeout(hre.getRequestTimeout());
-        config.connectTimeout(hre.getConnectTimeout());
+        ResolvedTimeouts rt = ResolvedTimeouts.resolve(hre);
+        config.socketTimeout(rt.socketTimeoutMillis());
+        config.connectTimeout(rt.connectTimeoutMillis());
         Map<String, String> requestHeaders = hre.getRequestHeaders();
         HttpRequestWithBody httpRequest = Unirest.request(httpMethod, requestUrl);
         Map<String, String> requestBody = hre.getRequestBody();
@@ -1210,4 +1203,31 @@ public class NetworkUtils {
         }
         return jo.toString();
     }
+
+    record ResolvedTimeouts(int connectTimeoutMillis, int socketTimeoutMillis, int callTimeoutMillis) {
+        public ResolvedTimeouts {
+            if (connectTimeoutMillis < 0
+                    || socketTimeoutMillis < 0
+                    || callTimeoutMillis < 0) {
+                throw new IllegalArgumentException("timeout must be >= 0");
+            }
+        }
+        /**
+         * 避免{@link Optional#ofNullable(Object)} 装箱开销
+         */
+        private static int ofNullableOr(Integer value, int defaultValue) {
+            return value != null ? value : defaultValue;
+        }
+
+        public static ResolvedTimeouts resolve(
+                HttpRequestEntity hre) {
+
+            return new ResolvedTimeouts(
+                    ofNullableOr(hre.getConnectTimeoutMillis(), TimeoutDefaults.CONNECT_TIMEOUT_MS),
+                    ofNullableOr(hre.getSocketTimeoutMillis(), TimeoutDefaults.SOCKET_TIMEOUT_MS),
+                    ofNullableOr(hre.getCallTimeoutMillis(), TimeoutDefaults.CALL_TIMEOUT_MS)
+                    // and more...
+            );
+        }
+        }
 }
