@@ -40,7 +40,7 @@ public final class DatabaseHelper {
     /*these field values can be revised before using*/
 
     static String driveClassName;
-    static String dbUlr;
+    static String dbUrl;
     static String username;
     static String password;
     static String db = PathConstants.DB_CONFIG_FILE_PATH;
@@ -50,7 +50,7 @@ public final class DatabaseHelper {
     static {
         Properties properties = loadDbConfig();
         driveClassName = properties.getProperty(DbConProperty.DRIVE_CLASS_NAME.getProperty());
-        dbUlr = properties.getProperty(DbConProperty.JDBC_URL.getProperty());
+        dbUrl = properties.getProperty(DbConProperty.JDBC_URL.getProperty());
         username = properties.getProperty(DbConProperty.USERNAME.getProperty());
         password = properties.getProperty(DbConProperty.PASSWORD.getProperty());
     }
@@ -61,11 +61,9 @@ public final class DatabaseHelper {
 
     public static Properties loadDbConfig() {
         Properties properties = new Properties();
-        FileInputStream fin;
         // 设置 JDBC 日志流到控制台
         DriverManager.setLogWriter(new PrintWriter(new PrintStream(System.out), true, Charset.defaultCharset()));
-        try {
-            fin = new FileInputStream(db);
+        try (FileInputStream fin = new FileInputStream(db)) {
             properties.load(fin);
         } catch (IOException e) {
             log.error("load {} error, {}", db, e.getMessage());
@@ -75,7 +73,7 @@ public final class DatabaseHelper {
 
     public static MysqlDataSource getDatasource() {
         MysqlDataSource dataSource = new MysqlDataSource();
-        dataSource.setURL(dbUlr);
+        dataSource.setURL(dbUrl);
         dataSource.setUser(username);
         dataSource.setPassword(password);
         return dataSource;
@@ -102,7 +100,7 @@ public final class DatabaseHelper {
             log.error("drive class not found, {}", e.getMessage());
         }
         try {
-            return DriverManager.getConnection(dbUlr, username, password);
+            return DriverManager.getConnection(dbUrl, username, password);
         } catch (SQLException e) {
             log.error("get connection error, {}", e.getMessage());
         }
@@ -196,6 +194,8 @@ public final class DatabaseHelper {
             return connection.getMetaData().getDatabaseProductName();
         } catch (SQLException e) {
             throw new RuntimeException(e);
+        } finally {
+            close(connection, null, null);
         }
     }
 
