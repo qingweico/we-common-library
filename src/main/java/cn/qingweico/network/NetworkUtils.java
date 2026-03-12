@@ -73,8 +73,8 @@ import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
+import java.util.zip.DeflaterOutputStream;
 import java.util.zip.GZIPOutputStream;
-import java.util.zip.InflaterOutputStream;
 
 /**
  * @author zqw
@@ -523,7 +523,7 @@ public class NetworkUtils {
             rcb.setProxy(new HttpHost(hre.getProxyHost(), hre.getProxyPort()));
         }
         if (hre.getConnectTimeoutMillis() != null) {
-            rcb.setConnectionRequestTimeout(hre.getConnectTimeoutMillis());
+            rcb.setConnectTimeout(hre.getConnectTimeoutMillis());
         }
         if (hre.getSocketTimeoutMillis() != null) {
             rcb.setSocketTimeout(hre.getSocketTimeoutMillis());
@@ -715,7 +715,7 @@ public class NetworkUtils {
                     if (isGzip) {
                         os = new GZIPOutputStream(os);
                     } else if (isDeflate) {
-                        os = new InflaterOutputStream(os);
+                        os = new DeflaterOutputStream(os);
                     }
                     os.write(bodyBytes);
                     os.flush();
@@ -967,50 +967,55 @@ public class NetworkUtils {
         String requestUrl = hre.getRequestUrl();
         String httpMethod = hre.getHttpMethod().name();
         infoLog("请求的URL ====> {}, 请求方式 -> [{}]", requestUrl, httpMethod);
-        Config config = Unirest.config();
-        if (StringUtils.isNotEmpty(hre.getProxyHost())) {
-            kong.unirest.Proxy proxy = new kong.unirest.Proxy(hre.getProxyHost(), hre.getProxyPort());
-            config.proxy(proxy);
-            infoLog("已启用代理服务器 ====> {}", proxy.getHost() + StringPool.COLON + proxy.getPort());
-        }
-        ResolvedTimeouts rt = ResolvedTimeouts.resolve(hre);
-        config.socketTimeout(rt.socketTimeoutMillis());
-        config.connectTimeout(rt.connectTimeoutMillis());
-        Map<String, String> requestHeaders = hre.getRequestHeaders();
-        HttpRequestWithBody httpRequest = Unirest.request(httpMethod, requestUrl);
-        Map<String, String> requestBody = hre.getRequestBody();
-        kong.unirest.HttpRequest<?> hr;
-        if (isRequestBodyAllowedHttpMethod(httpMethod)) {
-            if (requestBody != null) {
-                String contentType = requestHeaders == null
-                        ? MimeTypeUtils.APPLICATION_JSON_VALUE : requestHeaders.containsKey(Header.CONTENT_TYPE.getValue())
-                        ? requestHeaders.remove(Header.CONTENT_TYPE.getValue()) : MimeTypeUtils.APPLICATION_JSON_VALUE;
-                if (ContentType.FORM_URLENCODED.getValue().equals(contentType)) {
-                    Map<String, Object> parameters = new HashMap<>(requestBody);
-                    hr = httpRequest.fields(parameters);
-                } else if (ContentType.MULTIPART.getValue().equals(contentType)) {
-                    kong.unirest.MultipartBody multipartBody = httpRequest.multiPartContent();
-                    requestBody.forEach(multipartBody::field);
-                    hr = multipartBody;
-                } else {
-                    String body = mergeRequestBodyIfNecesaryToString(requestBody, hre.getComplexBody());
-                    httpRequest.header(Header.CONTENT_TYPE.getValue(), contentType);
-                    hr = httpRequest.body(body);
-                }
-            } else {
-                httpRequest.header(Header.CONTENT_TYPE.getValue(), ContentType.JSON.getValue());
-                hr = httpRequest.body(Symbol.EMPTY_JSON);
+        // Use an isolated UnirestInstance instead of the global Unirest singleton config,
+        // otherwise per-request proxy/timeout updates can affect concurrent requests.
+        try (UnirestInstance unirest = Unirest.spawnInstance()) {
+            Config config = unirest.config();
+            if (StringUtils.isNotEmpty(hre.getProxyHost())) {
+                kong.unirest.Proxy proxy = new kong.unirest.Proxy(hre.getProxyHost(), hre.getProxyPort());
+                config.proxy(proxy);
+                infoLog("已启用代理服务器 ====> {}", proxy.getHost() + StringPool.COLON + proxy.getPort());
             }
-            infoBodyLog(unirestBodyToString(hr));
-        } else {
-            hr = httpRequest;
-        }
-        if (requestHeaders != null) {
-            // 修复了 3.7.04 unirest-java 中 no multipart boundary was found 问题
-            hr.headers(requestHeaders);
-        }
-        infoHeadersLog(fromHeadersToString(httpRequest.getHeaders().all()));
-        try {
+            ResolvedTimeouts rt = ResolvedTimeouts.resolve(hre);
+            config.socketTimeout(rt.socketTimeoutMillis());
+            config.connectTimeout(rt.connectTimeoutMillis());
+
+            Map<String, String> originalHeaders = hre.getRequestHeaders();
+            Map<String, String> requestHeaders = originalHeaders == null ? null : new HashMap<>(originalHeaders);
+            HttpRequestWithBody httpRequest = unirest.request(httpMethod, requestUrl);
+            Map<String, String> requestBody = hre.getRequestBody();
+            kong.unirest.HttpRequest<?> hr;
+            if (isRequestBodyAllowedHttpMethod(httpMethod)) {
+                if (requestBody != null) {
+                    String contentType = requestHeaders == null
+                            ? MimeTypeUtils.APPLICATION_JSON_VALUE : requestHeaders.containsKey(Header.CONTENT_TYPE.getValue())
+                            ? requestHeaders.remove(Header.CONTENT_TYPE.getValue()) : MimeTypeUtils.APPLICATION_JSON_VALUE;
+                    if (ContentType.FORM_URLENCODED.getValue().equals(contentType)) {
+                        Map<String, Object> parameters = new HashMap<>(requestBody);
+                        hr = httpRequest.fields(parameters);
+                    } else if (ContentType.MULTIPART.getValue().equals(contentType)) {
+                        kong.unirest.MultipartBody multipartBody = httpRequest.multiPartContent();
+                        requestBody.forEach(multipartBody::field);
+                        hr = multipartBody;
+                    } else {
+                        String body = mergeRequestBodyIfNecesaryToString(requestBody, hre.getComplexBody());
+                        httpRequest.header(Header.CONTENT_TYPE.getValue(), contentType);
+                        hr = httpRequest.body(body);
+                    }
+                } else {
+                    httpRequest.header(Header.CONTENT_TYPE.getValue(), ContentType.JSON.getValue());
+                    hr = httpRequest.body(Symbol.EMPTY_JSON);
+                }
+                infoBodyLog(unirestBodyToString(hr));
+            } else {
+                hr = httpRequest;
+            }
+            if (requestHeaders != null) {
+                // 修复了 3.7.04 unirest-java 中 no multipart boundary was found 问题
+                hr.headers(requestHeaders);
+            }
+            infoHeadersLog(fromHeadersToString(httpRequest.getHeaders().all()));
+
             kong.unirest.HttpResponse<String> httpResponse = hr.asString();
             String responseBody = httpResponse.getBody();
             kong.unirest.Headers responseHeaders = httpResponse.getHeaders();
