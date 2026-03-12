@@ -11,6 +11,7 @@ import java.util.Scanner;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+
 /**
  * {@link NetworkUtils#httpRequest(HttpRequestEntity) 并发测试}
  * 200 并发 2000个请求
@@ -29,7 +30,7 @@ public class NetworkUtilsTest {
 
         Scanner scanner = new Scanner(System.in);
         String s = scanner.nextLine();
-        if("OK".equalsIgnoreCase(s)) {
+        if ("OK".equalsIgnoreCase(s)) {
             ExecutorService pool = Executors.newFixedThreadPool(THREADS);
             CountDownLatch latch = new CountDownLatch(REQUESTS);
 
@@ -40,10 +41,9 @@ public class NetworkUtilsTest {
                     try {
                         HttpRequestEntity hre = getRequestEntity();
                         NetworkUtils.httpRequest(hre, ConversionMethod.APACHE);
-                    }catch (Exception e) {
+                    } catch (Exception e) {
                         log.error(e.getMessage(), e);
-                    }
-                    finally {
+                    } finally {
                         latch.countDown();
                     }
                 });
