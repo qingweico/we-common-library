@@ -22,6 +22,7 @@ import jodd.util.StringPool;
 import kong.unirest.*;
 import lombok.extern.slf4j.Slf4j;
 import okhttp3.*;
+import okhttp3.Cache;
 import okhttp3.Headers;
 import okhttp3.MultipartBody;
 import okio.Buffer;
@@ -38,6 +39,7 @@ import org.apache.http.client.methods.HttpGet;
 import org.apache.http.client.methods.HttpPost;
 import org.apache.http.client.methods.HttpRequestBase;
 import org.apache.http.client.utils.URIBuilder;
+import org.apache.http.conn.HttpClientConnectionManager;
 import org.apache.http.entity.StringEntity;
 import org.apache.http.entity.mime.HttpMultipartMode;
 import org.apache.http.entity.mime.MultipartEntityBuilder;
@@ -137,8 +139,21 @@ public class NetworkUtils {
         APACHE_CLIENT = HttpClientBuilder.create()
                 .setDefaultRequestConfig(DEFAULT_REQUEST_CONFIG)
                 .setConnectionManager(CONNECTION_MANAGER)
+                // 启动一个独立的守护线程(Evictor Thread)用来清理过期以及空闲连接(两次请求的间隔大于5分钟)
                 .evictIdleConnections(5, TimeUnit.MINUTES)
                 .build();
+
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            infoLog("JVM 正在退出, 开始关闭全局 OkHttpClient...");
+            shutdownOkHttpClient(OKHTTP_CLIENT);
+            infoLog("OkHttpClient 已安全关闭...");
+        }));
+
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            infoLog("JVM 正在退出, 开始关闭全局 Apache HttpClient...");
+            shutdownApacheClient(APACHE_CLIENT, CONNECTION_MANAGER);
+            infoLog("Apache HttpClient 已安全关闭...");
+        }));
     }
 
     /**
@@ -152,23 +167,16 @@ public class NetworkUtils {
      */
     public static String getLocalMac() throws SocketException {
         InetAddress ia = NetworkAddressResolver.getLocalAddress();
-        byte[] macAddress = NetworkInterface.getByInetAddress(ia).getHardwareAddress();
-        log.info("Mac Array: [{}], Mac Byte Array Length: {}", Arrays.toString(macAddress), macAddress.length);
+        byte[] mac = NetworkInterface.getByInetAddress(ia).getHardwareAddress();
+        log.info("Mac Array: [{}], Mac Byte Array Length: {}", Arrays.toString(mac), mac.length);
         StringBuilder result = new StringBuilder();
-        for (int i = 0; i < macAddress.length; i++) {
-            if (i != 0) {
-                result.append("-");
-            }
-            int tmp = macAddress[i] & 0xff;
-            String str = Integer.toHexString(tmp);
-            log.info("每8位: {}", str);
-            if (str.length() == 1) {
-                result.append("0").append(str);
-            } else {
-                result.append(str);
-            }
+        for (byte b : mac) {
+            String macVal = Integer.toHexString(b & 0xFF);
+            log.info("每8位: {}", macVal);
+            result.append(macVal.length() == 1 ? "0".concat(macVal) : macVal).append("-");
         }
-        return result.toString();
+        result.delete(result.length() - 1, result.length());
+        return result.toString().toUpperCase();
     }
 
     /**
@@ -1217,6 +1225,7 @@ public class NetworkUtils {
                 throw new IllegalArgumentException("timeout must be >= 0");
             }
         }
+
         /**
          * 避免{@link Optional#ofNullable(Object)} 装箱开销
          */
@@ -1234,5 +1243,39 @@ public class NetworkUtils {
                     // and more...
             );
         }
+    }
+
+    public static void shutdownOkHttpClient(final OkHttpClient client) {
+        if (client == null) {
+            return;
         }
+
+        client.dispatcher().cancelAll();
+        client.dispatcher().executorService().shutdown();
+        client.connectionPool().evictAll();
+        Cache cache = client.cache();
+        if (cache != null) {
+            try {
+                client.cache().close();
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
+    public static void shutdownApacheClient(final CloseableHttpClient client, final HttpClientConnectionManager connectionManager) {
+        if (client == null) {
+            return;
+        }
+
+        try {
+            client.close();
+        } catch (IOException ignored) {
+
+        }
+
+        if (connectionManager != null) {
+            connectionManager.shutdown();
+        }
+    }
+
 }

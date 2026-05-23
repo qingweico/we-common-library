@@ -31,6 +31,7 @@ import org.apache.commons.lang3.time.StopWatch;
 import org.apache.poi.poifs.filesystem.FileMagic;
 import org.apache.tika.Tika;
 import org.jetbrains.annotations.NotNull;
+import org.springframework.util.Base64Utils;
 import org.springframework.util.FastByteArrayOutputStream;
 import org.springframework.util.FileCopyUtils;
 import org.springframework.util.StreamUtils;
@@ -1202,5 +1203,15 @@ public final class FileUtils {
             log.error(e.getMessage(), e);
             return false;
         }
+    }
+
+    public static String imgToBase64(String imgPath) {
+        try (FileInputStream inputStream = new FileInputStream(imgPath)) {
+            byte[] bytes = StreamUtils.copyToByteArray(inputStream);
+            return Base64Utils.encodeToString(bytes);
+        } catch (Exception e) {
+            log.error("图片转base64失败", e);
+        }
+        return null;
     }
 }
